@@ -2,7 +2,6 @@ import {
   IndexerError,
   PrivateNoteScanError,
   scanPrivateNotes,
-  type BrowserNoteIdentity,
   type Indexer,
   type IndexerStatus,
   type PrivateNoteScan,
@@ -11,8 +10,8 @@ import {
 import type { Client } from "@gorbagana/privacy-trash-client";
 
 import { ESTIMATED_NETWORK_FEE_LAMPORTS } from "@/features/transfer/logic/fees";
-import { getHasherWasmInput } from "@/features/transfer/logic/hasher";
 import { privacyIndexer } from "@/features/transfer/logic/indexer";
+import { scanPrivateBalance } from "@/features/transfer/logic/private-balance";
 import type {
   PreparedTransfer,
   TransferDraft,
@@ -30,16 +29,6 @@ export type PrepareTransferOptions = {
   scanPrivateNotes?: ((input: ScanPrivateNotesInput) => Promise<PrivateNoteScan>) | undefined;
   privacyIdentity?: PrivacyIdentity | undefined;
 };
-
-function toBrowserNoteIdentity(
-  identity: PrivacyIdentity,
-): BrowserNoteIdentity {
-  return {
-    programAddress: identity.programAddress,
-    signatureBase64: identity.signatureBase64,
-    walletAddress: identity.walletAddress,
-  };
-}
 
 function normalizePreparationError(error: unknown): Error {
   if (error instanceof IndexerError) {
@@ -63,33 +52,6 @@ function normalizePreparationError(error: unknown): Error {
   }
 
   return new Error("Unable to prepare transfer.");
-}
-
-async function scanTransferPrivateNotes(input: {
-  identity: PrivacyIdentity;
-  indexer: Pick<Indexer, "getOutputRange" | "getNullifierStatus">;
-  scanNotes: (input: ScanPrivateNotesInput) => Promise<PrivateNoteScan>;
-}): Promise<PrivateNoteScan> {
-  const scanInput = {
-    identity: toBrowserNoteIdentity(input.identity),
-    hasherWasm: getHasherWasmInput(),
-    indexer: input.indexer,
-    programAddress: input.identity.programAddress,
-  } satisfies ScanPrivateNotesInput;
-  const firstScan = await input.scanNotes(scanInput).catch((error: unknown) => {
-    throw normalizePreparationError(error);
-  });
-
-  if (firstScan.unspentNoteCount > 0 || firstScan.totalOutputCount === 0) {
-    return firstScan;
-  }
-
-  return await input.scanNotes({
-    ...scanInput,
-    syncMode: "full",
-  }).catch((error: unknown) => {
-    throw normalizePreparationError(error);
-  });
 }
 
 function createNoPrivateBalanceError(privateNotes: PrivateNoteScan): Error {
@@ -140,10 +102,12 @@ export async function prepareTransfer(
   }
 
   const scanNotes = options.scanPrivateNotes ?? scanPrivateNotes;
-  const privateNotes = await scanTransferPrivateNotes({
+  const privateNotes = await scanPrivateBalance({
     identity: privacyIdentity,
     indexer: options.privateNoteIndexer ?? privacyIndexer,
     scanNotes,
+  }).catch((error: unknown) => {
+    throw normalizePreparationError(error);
   });
 
   if (privateNotes.unspentNoteCount === 0) {

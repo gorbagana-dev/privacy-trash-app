@@ -5,9 +5,10 @@ import { useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
 
 import { ReviewTransferModal } from "@/features/transfer/components/review-transfer-modal";
-import { Button } from "@/components/ui/button";
+import { ActionButton } from "@/components/ui/action-button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { usePrivateBalance } from "@/features/transfer/hooks/use-private-balance";
 import { useTransferFlow } from "@/features/transfer/hooks/use-transfer-flow";
 import { ConnectWalletButton } from "@/features/wallet/components/connect-wallet-button";
 import { WalletSummary } from "@/features/wallet/components/wallet-summary";
@@ -34,6 +35,9 @@ const operationModes = [
 export function TransferForm() {
   const transferFlow = useTransferFlow();
   const walletConnection = useWalletConnection();
+  const privateBalance = usePrivateBalance({
+    refreshKey: transferFlow.state.receipt?.signature ?? null,
+  });
 
   const form = useForm<OperationFormValues, undefined, ValidOperation>({
     defaultValues: operationDefaults,
@@ -176,13 +180,26 @@ export function TransferForm() {
           <WalletSummary />
 
           {walletConnection.isConnected ? (
-            <Button
+            <div className="flex h-11 items-center justify-between gap-3 rounded-lg border border-white/[0.08] bg-black/20 px-4">
+              <span className="font-sans text-sm font-medium text-zinc-500">
+                Private Balance:
+              </span>
+              <span className="font-heading text-sm font-bold italic text-white">
+                {privateBalance.displayValue}
+              </span>
+            </div>
+          ) : null}
+
+          {walletConnection.isConnected ? (
+            <ActionButton
               type="submit"
               disabled={!isValid || isSubmitting}
+              state={isSubmitting ? "loading" : "idle"}
+              loadingLabel="Reviewing"
               className="h-12 w-full rounded-xl bg-[#4dff91] px-8 font-heading text-base font-bold italic text-black uppercase hover:bg-[#67ffa2] active:scale-[0.98] disabled:bg-[#4dff91] disabled:opacity-40"
             >
               {submitLabel}
-            </Button>
+            </ActionButton>
           ) : (
             <ConnectWalletButton />
           )}

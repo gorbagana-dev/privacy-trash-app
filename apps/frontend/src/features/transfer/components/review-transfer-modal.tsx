@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 
+import { ActionButton } from "@/components/ui/action-button";
 import { Button } from "@/components/ui/button";
 import type {
   PreparedPrivateOperation,
@@ -295,9 +296,14 @@ export function ReviewTransferModal({
               Open Transaction
             </a>
           ) : (
-            <Button
+            <ActionButton
               type="button"
               disabled={isBusy || isSubmitted}
+              state={
+                isBusy ? "loading" : isSubmitted ? "success" : "idle"
+              }
+              loadingLabel={isPreparing ? "Preparing" : "Signing"}
+              successLabel="Complete"
               className="h-12 rounded-xl bg-[#4dff91] px-5 font-heading text-sm font-bold italic text-black uppercase hover:bg-[#67ffa2] active:scale-[0.98] disabled:bg-[#4dff91] disabled:opacity-50"
               onClick={() => void primaryAction()}
             >
@@ -306,7 +312,7 @@ export function ReviewTransferModal({
                 : isPrepared && !isExecutable
                   ? "Prepared"
                   : primaryLabel}
-            </Button>
+            </ActionButton>
           )}
         </div>
       </div>

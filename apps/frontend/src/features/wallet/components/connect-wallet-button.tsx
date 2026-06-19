@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { ActionButton } from "@/components/ui/action-button";
 import { WalletModal } from "@/features/wallet/components/wallet-modal";
 import { useWalletConnection } from "@/features/wallet/hooks/use-wallet-connection";
 import { cn } from "@/lib/utils";
@@ -18,17 +18,19 @@ export function ConnectWalletButton({ className }: ConnectWalletButtonProps) {
 
   return (
     <>
-      <Button
+      <ActionButton
         type="button"
         disabled={walletConnection.isConnecting}
+        state={walletConnection.isConnecting ? "loading" : "idle"}
+        loadingLabel="Connecting"
         className={cn(
           "h-12 w-full rounded-xl bg-[#4dff91] px-8 font-heading text-base font-bold italic text-black uppercase hover:bg-[#67ffa2] active:scale-[0.98] disabled:bg-[#4dff91] disabled:opacity-50",
           className,
         )}
         onClick={walletConnection.openWalletModal}
       >
-        {walletConnection.isConnecting ? "Connecting" : "Connect Wallet"}
-      </Button>
+        Connect Wallet
+      </ActionButton>
 
       <WalletModal
         connectionError={walletConnection.connectionError}
