@@ -1,0 +1,44 @@
+{
+  "name": "@gorbagana/privacy-trash-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "description": "TypeScript client workflow utilities for Privacy Trash private GOR transfers.",
+  "types": "./dist/index.d.mts",
+  "module": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.mts",
+      "import": "./dist/browser.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@gorbagana/privacy-trash-sdk": "0.1.0",
+    "@lightprotocol/hasher.rs": "^0.2.1",
+    "@noble/hashes": "^2.2.0",
+    "@solana/kit": "^6.10.0",
+    "snarkjs": "^0.7.6",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/snarkjs": "^0.7.9",
+    "tsdown": "^0.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

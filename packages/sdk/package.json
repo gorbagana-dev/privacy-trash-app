@@ -1,0 +1,42 @@
+{
+  "name": "@gorbagana/privacy-trash-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "description": "TypeScript SDK for the Privacy Trash program.",
+  "types": "./dist/index.d.mts",
+  "module": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "idl",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate": "node scripts/generate-client.mjs"
+  },
+  "devDependencies": {
+    "@codama/nodes-from-anchor": "^1.5.1",
+    "@codama/renderers-js": "^2.3.0",
+    "codama": "^1.8.0",
+    "tsdown": "^0.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "peerDependencies": {
+    "@solana/kit": "^6.10.0"
+  },
+  "dependencies": {
+    "@solana/program-client-core": "^6.10.0"
+  }
+}
