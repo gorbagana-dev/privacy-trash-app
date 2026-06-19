@@ -12,6 +12,8 @@ import type {
 } from "@/circuit";
 import {
   bytesToHex,
+  FIELD_SIZE,
+  fieldBytesToDecimal,
   fieldDecimalToBytes,
   fieldElementDecimalSchema,
 } from "@/field";
@@ -82,6 +84,8 @@ export function createProofRunner(input: CreateProofRunnerInput): ProofRunner {
 }
 
 export function createSnarkInput(input: ProofRunnerInput): CircuitSignals {
+  validateAmountInvariant(input);
+
   return {
     root: bytesToFieldDecimal(input.publicInputs.root),
     publicAmount: bytesToFieldDecimal(input.publicInputs.publicAmount),
@@ -98,6 +102,25 @@ export function createSnarkInput(input: ProofRunnerInput): CircuitSignals {
     outPubkey: input.outputs.map((output) => output.publicKey),
     outBlinding: input.outputs.map((output) => output.blinding),
   };
+}
+
+function validateAmountInvariant(input: ProofRunnerInput): void {
+  const sumIns = input.inputNotes.reduce(
+    (sum, note) => sum + note.amountLamports,
+    0n,
+  );
+  const sumOuts = input.outputs.reduce(
+    (sum, output) => sum + output.amountLamports,
+    0n,
+  );
+  const publicAmount = BigInt(fieldBytesToDecimal(input.publicInputs.publicAmount));
+  const expectedPublicAmount = modField(sumOuts - sumIns);
+
+  if (publicAmount !== expectedPublicAmount) {
+    throw new Error(
+      "Proof input amount invariant failed before proving.",
+    );
+  }
 }
 
 export function formatProof(input: unknown): ProofRunnerOutput {
@@ -160,6 +183,10 @@ function getExpectedPublicSignalBytes(
 
 function bytesToFieldDecimal(bytes: Uint8Array): string {
   return BigInt(`0x${bytesToHex(bytes)}`).toString();
+}
+
+function modField(value: bigint): bigint {
+  return ((value % FIELD_SIZE) + FIELD_SIZE) % FIELD_SIZE;
 }
 
 function toLittleEndianFieldBytes(input: unknown): Uint8Array {

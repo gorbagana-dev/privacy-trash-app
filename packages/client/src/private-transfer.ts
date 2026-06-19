@@ -121,6 +121,7 @@ export function createPrivateTransferExecutor(
     indexer: input.indexer,
     noteSelector,
     circuitProver,
+    hasher: input.hasher,
     programAddress,
     ownerAddress,
     now: input.now,

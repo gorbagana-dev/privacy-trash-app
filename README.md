@@ -1,36 +1,67 @@
 # Privacy Trash App
 
-Monorepo for the Privacy Trash GOR-only private transfer app.
+Privacy Trash is a GOR-only private transfer app for Gorbagana.
+
+This repository contains the frontend, backend, client package, and contract SDK used by the app.
 
 ## Workspaces
 
-- `apps/frontend`: Next.js frontend.
-- `apps/backend`: Hono backend and indexer API.
-- `packages/client`: transaction, note, proof, and browser workflow utilities.
-- `packages/sdk`: generated and hand-curated TypeScript SDK for the on-chain program.
+| Path | Package | Purpose |
+| --- | --- | --- |
+| `apps/frontend` | `@gorbagana/privacy-trash-frontend` | Next.js app |
+| `apps/backend` | `@gorbagana/privacy-trash-backend` | Hono API and indexer |
+| `packages/client` | `@gorbagana/privacy-trash-client` | Browser and transaction workflow helpers |
+| `packages/sdk` | `@gorbagana/privacy-trash-sdk` | TypeScript SDK for the on-chain program |
+
+## Requirements
+
+- Node.js 24 or newer
+- npm 11 or newer
+- Postgres
+- Gorbagana RPC access
 
 ## Setup
 
-```bash
+Install dependencies from the repository root:
+
+```sh
 npm install
 ```
 
-Local environment files live in the app that uses them:
+Create local environment files:
 
-- `apps/backend/.env`
-- `apps/frontend/.env.local`
+```sh
+cp apps/backend/.env.example apps/backend/.env
+cp apps/frontend/.env.example apps/frontend/.env.local
+```
 
-Use the committed `.env.example` files as templates. Real `.env` files are ignored.
+Set `DATABASE_URL` in `apps/backend/.env`, then run migrations:
+
+```sh
+npm run db:migrate
+```
+
+Start the backend and frontend:
+
+```sh
+npm run dev:backend
+npm run dev:frontend
+```
 
 ## Commands
 
-```bash
-npm run dev:frontend
-npm run dev:backend
-npm run typecheck
-npm run test
-npm run lint
-npm run build
-```
+| Command | Description |
+| --- | --- |
+| `npm run dev:frontend` | Start the frontend |
+| `npm run dev:backend` | Start the backend |
+| `npm run typecheck` | Run TypeScript checks |
+| `npm run test` | Run tests |
+| `npm run lint` | Run linting |
+| `npm run build` | Build all workspaces |
+| `npm run db:generate` | Generate Drizzle migrations |
+| `npm run db:migrate` | Apply Drizzle migrations |
+| `npm run generate:sdk` | Regenerate the contract SDK |
 
-`npm run db:generate` and `npm run db:migrate` run the backend Drizzle commands.
+## Environment Files
+
+Commit `.env.example` files only. Local `.env` files are ignored by Git.

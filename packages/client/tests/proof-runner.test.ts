@@ -5,6 +5,7 @@ import {
   bytesToHex,
   createProofRunner,
   createSnarkInput,
+  FIELD_SIZE,
   fieldDecimalToBytes,
   formatProof,
   quoteTransfer,
@@ -29,7 +30,7 @@ describe("proof runner", () => {
   it("builds the snark input expected by the transaction circuit", () => {
     expect(createSnarkInput(createRunnerInput())).toEqual({
       root: "1",
-      publicAmount: "2",
+      publicAmount: fieldNegative(90n),
       extDataHash: "3",
       mintAddress: "11111111111111111111111111111112",
       inputNullifier: ["4", "5"],
@@ -42,7 +43,7 @@ describe("proof runner", () => {
         ["0", "0"],
       ],
       outputCommitment: ["6", "7"],
-      outAmount: ["90", "0"],
+      outAmount: ["10", "0"],
       outPubkey: ["41", "41"],
       outBlinding: ["51", "52"],
     });
@@ -69,7 +70,9 @@ describe("proof runner", () => {
   });
 
   it("runs snarkjs fullProve and returns formatted proof bytes", async () => {
-    const groth16 = createGroth16({ publicSignals: ["1", "2", "3", "4", "5", "6", "7"] });
+    const groth16 = createGroth16({
+      publicSignals: createPublicSignals(),
+    });
     const runner = createProofRunner({
       wasm: "/circuit/transaction2.wasm",
       zkey: "/circuit/transaction2.zkey",
@@ -102,13 +105,34 @@ describe("proof runner", () => {
       wasm: "/circuit/transaction2.wasm",
       zkey: "/circuit/transaction2.zkey",
       groth16: createGroth16({
-        publicSignals: ["1", "2", "3", "4", "5", "6", "8"],
+        publicSignals: createPublicSignals({ outputCommitment2: "8" }),
       }),
     });
 
     await expect(runner.prove(createRunnerInput())).rejects.toThrow(
       "Proof public signal 6 does not match",
     );
+  });
+
+  it("rejects proof inputs that do not satisfy the circuit amount invariant", async () => {
+    const groth16 = createGroth16({ publicSignals: createPublicSignals() });
+    const runner = createProofRunner({
+      wasm: "/circuit/transaction2.wasm",
+      zkey: "/circuit/transaction2.zkey",
+      groth16,
+    });
+    const input = createRunnerInput();
+
+    await expect(
+      runner.prove({
+        ...input,
+        publicInputs: {
+          ...input.publicInputs,
+          publicAmount: fieldDecimalToBytes("2"),
+        },
+      }),
+    ).rejects.toThrow("Proof input amount invariant failed before proving.");
+    expect(groth16.fullProve).not.toHaveBeenCalled();
   });
 });
 
@@ -141,7 +165,7 @@ function createRunnerInput(): ProofRunnerInput {
   });
 
   return {
-    transfer: {
+    operation: {
       programAddress,
       ownerAddress,
       recipient,
@@ -177,7 +201,7 @@ function createRunnerInput(): ProofRunnerInput {
     outputs: [
       {
         kind: "change",
-        amountLamports: 90n,
+        amountLamports: 10n,
         blinding: "51",
         index: 8,
         publicKey: "41",
@@ -200,12 +224,30 @@ function createRunnerInput(): ProofRunnerInput {
     },
     publicInputs: {
       root: fieldDecimalToBytes("1"),
-      publicAmount: fieldDecimalToBytes("2"),
+      publicAmount: fieldDecimalToBytes(fieldNegative(90n)),
       extDataHash: fieldDecimalToBytes("3"),
       inputNullifiers: [fieldDecimalToBytes("4"), fieldDecimalToBytes("5")],
       outputCommitments: [fieldDecimalToBytes("6"), fieldDecimalToBytes("7")],
     },
   };
+}
+
+function createPublicSignals(
+  overrides: { outputCommitment2?: string } = {},
+): string[] {
+  return [
+    "1",
+    fieldNegative(90n),
+    "3",
+    "4",
+    "5",
+    "6",
+    overrides.outputCommitment2 ?? "7",
+  ];
+}
+
+function fieldNegative(value: bigint): string {
+  return (FIELD_SIZE - value).toString();
 }
 
 function fieldHex(value: string): string {

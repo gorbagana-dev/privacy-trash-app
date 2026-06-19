@@ -1,6 +1,7 @@
 import type {
-  PreparedTransfer,
-  TransferDraft,
+  PreparedPrivateOperation,
+  PrivateOperationReceipt,
+  PrivateOperationDraft,
 } from "@/features/transfer/types/transfer.types";
 
 export type TransferFlowStatus =
@@ -12,30 +13,18 @@ export type TransferFlowStatus =
   | "submitted"
   | "failed";
 
-export type TransferFlowState =
-  | {
-      status: "editing";
-      draft: null;
-      error: null;
-      preparedTransfer: null;
-    }
-  | {
-      status: "reviewing" | "preparing" | "failed";
-      draft: TransferDraft;
-      error: string | null;
-      preparedTransfer: null;
-    }
-  | {
-      status: "prepared" | "signing" | "submitted";
-      draft: TransferDraft;
-      error: null;
-      preparedTransfer: PreparedTransfer;
-    };
+export type TransferFlowState = {
+  status: TransferFlowStatus;
+  draft: PrivateOperationDraft | null;
+  error: string | null;
+  preparedOperation: PreparedPrivateOperation | null;
+  receipt: PrivateOperationReceipt | null;
+};
 
 export type TransferFlowAction =
   | {
       type: "review";
-      draft: TransferDraft;
+      draft: PrivateOperationDraft;
     }
   | {
       type: "cancel";
@@ -45,10 +34,21 @@ export type TransferFlowAction =
     }
   | {
       type: "prepare-succeeded";
-      preparedTransfer: PreparedTransfer;
+      preparedOperation: PreparedPrivateOperation;
     }
   | {
       type: "prepare-failed";
+      error: string;
+    }
+  | {
+      type: "execute-started";
+    }
+  | {
+      type: "execute-succeeded";
+      receipt: PrivateOperationReceipt;
+    }
+  | {
+      type: "execute-failed";
       error: string;
     };
 
@@ -56,7 +56,8 @@ export const initialTransferFlowState: TransferFlowState = {
   status: "editing",
   draft: null,
   error: null,
-  preparedTransfer: null,
+  preparedOperation: null,
+  receipt: null,
 };
 
 export function transferFlowReducer(
@@ -72,7 +73,8 @@ export function transferFlowReducer(
       status: "reviewing",
       draft: action.draft,
       error: null,
-      preparedTransfer: null,
+      preparedOperation: null,
+      receipt: null,
     };
   }
 
@@ -85,7 +87,8 @@ export function transferFlowReducer(
       status: "preparing",
       draft: state.draft,
       error: null,
-      preparedTransfer: null,
+      preparedOperation: null,
+      receipt: null,
     };
   }
 
@@ -94,7 +97,36 @@ export function transferFlowReducer(
       status: "prepared",
       draft: state.draft,
       error: null,
-      preparedTransfer: action.preparedTransfer,
+      preparedOperation: action.preparedOperation,
+      receipt: null,
+    };
+  }
+
+  if (action.type === "execute-started") {
+    if (!state.preparedOperation) {
+      return state;
+    }
+
+    return {
+      status: "signing",
+      draft: state.draft,
+      error: null,
+      preparedOperation: state.preparedOperation,
+      receipt: null,
+    };
+  }
+
+  if (action.type === "execute-succeeded") {
+    if (!state.preparedOperation) {
+      return state;
+    }
+
+    return {
+      status: "submitted",
+      draft: state.draft,
+      error: null,
+      preparedOperation: state.preparedOperation,
+      receipt: action.receipt,
     };
   }
 
@@ -102,6 +134,7 @@ export function transferFlowReducer(
     status: "failed",
     draft: state.draft,
     error: action.error,
-    preparedTransfer: null,
+    preparedOperation: state.preparedOperation,
+    receipt: null,
   };
 }

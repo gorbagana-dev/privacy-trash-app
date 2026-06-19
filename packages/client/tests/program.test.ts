@@ -60,12 +60,12 @@ describe("program", () => {
     expect(
       bytesToHex(
         encodePublicAmount({
-          extAmount: -1_002_506n,
+          extAmount: -1_000_000n,
           fee: 2_506n,
         }),
       ),
     ).toBe(
-      "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593eff0aa2d",
+      "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593eff0b3f7",
     );
   });
 
@@ -96,7 +96,7 @@ describe("program", () => {
       bytesToHex(
         hashExtData({
           extData: {
-            extAmount: -1_002_506n,
+            extAmount: -1_000_000n,
             fee: 2_506n,
           },
           recipient,
@@ -109,7 +109,7 @@ describe("program", () => {
         }),
       ),
     ).toBe(
-      "0696bb2fa1e9a98903e9f23f202b7506a75d29e4ca8d7fdf2456a6f0b272b100",
+      "15adc0ecdbce566a512b71883ffd9a704659b41ed2810e9aba73444a1030d4fb",
     );
   });
 
@@ -118,12 +118,12 @@ describe("program", () => {
 
     await expect(
       encoder.encodePublicAmount({
-        extAmount: -1_002_506n,
+        extAmount: -1_000_000n,
         fee: 2_506n,
       }),
     ).resolves.toEqual(
       encodePublicAmount({
-        extAmount: -1_002_506n,
+        extAmount: -1_000_000n,
         fee: 2_506n,
       }),
     );

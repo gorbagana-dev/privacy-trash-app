@@ -4,12 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   NATIVE_TOKEN_SENTINEL,
   UTXO_ENCRYPTION_VERSION_V2,
+  UTXO_ENCRYPTION_VERSION_V3,
   addressSchema,
   bytesToHex,
   createOutputBlinding,
   createOutputEncryptor,
   createRandomFieldElement,
   createUtxoDecryptor,
+  encodeOutputPayload,
   encryptedOutputBytesToHex,
   serializeOutputPayload,
   type PoseidonHasher,
@@ -34,7 +36,7 @@ describe("output", () => {
       blinding.createBlinding({
         kind: "change",
         outputIndex: 1,
-        transfer: createTransfer(),
+        operation: createTransfer(),
       }),
     ).resolves.toMatch(/^\d+$/);
   });
@@ -60,6 +62,22 @@ describe("output", () => {
     ).toBe(`100|9|7|${NATIVE_TOKEN_SENTINEL}`);
   });
 
+  it("encodes compact binary output payloads", () => {
+    const payload = encodeOutputPayload({
+      amountLamports: 100n,
+      blinding: "9",
+      index: 7,
+      mintAddress: NATIVE_TOKEN_SENTINEL,
+    });
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+
+    expect(payload.byteLength).toBe(49);
+    expect(payload[0]).toBe(0);
+    expect(view.getBigUint64(1, true)).toBe(100n);
+    expect(view.getBigUint64(9, true)).toBe(7n);
+    expect(bytesToHex(payload.slice(17))).toBe("0".repeat(63) + "9");
+  });
+
   it("encrypts outputs that roundtrip through the UTXO decryptor", async () => {
     const encryptor = createOutputEncryptor({
       randomBytes: () => fixedIv,
@@ -83,8 +101,9 @@ describe("output", () => {
     });
 
     expect(bytesToHex(encryptedOutput.slice(0, 8))).toBe(
-      bytesToHex(UTXO_ENCRYPTION_VERSION_V2),
+      bytesToHex(UTXO_ENCRYPTION_VERSION_V3),
     );
+    expect(encryptedOutput.byteLength).toBe(85);
     expect(bytesToHex(encryptedOutput.slice(8, 20))).toBe(bytesToHex(fixedIv));
     await expect(
       decryptor.decryptOwnedNote({
@@ -92,6 +111,7 @@ describe("output", () => {
         ownerAddress,
         noteKey: keccak_256(unlockSignature),
         encryptedOutput: encryptedOutputBytesToHex(encryptedOutput),
+        outputIndex: 7,
       }),
     ).resolves.toEqual({
       commitment: "1002",
@@ -99,7 +119,7 @@ describe("output", () => {
         "00000000000000000000000000000000000000000000000000000000000003ec",
       amountLamports: 100n,
       witness: {
-        version: "v2",
+        version: "v3",
         amountLamports: 100n,
         blinding: "9",
         index: 7,
@@ -109,6 +129,34 @@ describe("output", () => {
         nullifier: "1004",
         nullifierHex:
           "00000000000000000000000000000000000000000000000000000000000003ec",
+        mintAddress: NATIVE_TOKEN_SENTINEL,
+      },
+    });
+  });
+
+  it("keeps decrypting legacy v2 text outputs", async () => {
+    const encryptedOutput = await encryptLegacyOutput({
+      noteKey: keccak_256(unlockSignature),
+      payload: `100|9|7|${NATIVE_TOKEN_SENTINEL}`,
+    });
+    const decryptor = createUtxoDecryptor({
+      hasher: createSequencedHasher(["1001", "1002", "1003", "1004"]),
+    });
+
+    await expect(
+      decryptor.decryptOwnedNote({
+        programAddress,
+        ownerAddress,
+        noteKey: keccak_256(unlockSignature),
+        encryptedOutput: encryptedOutputBytesToHex(encryptedOutput),
+        outputIndex: 7,
+      }),
+    ).resolves.toMatchObject({
+      amountLamports: 100n,
+      witness: {
+        version: "v2",
+        blinding: "9",
+        index: 7,
         mintAddress: NATIVE_TOKEN_SENTINEL,
       },
     });
@@ -142,6 +190,7 @@ describe("output", () => {
         ownerAddress,
         noteKey: keccak_256(new Uint8Array([9, 9, 9])),
         encryptedOutput: encryptedOutputBytesToHex(encryptedOutput),
+        outputIndex: 7,
       }),
     ).resolves.toBeNull();
   });
@@ -185,4 +234,53 @@ function parseBytes(input: unknown): Uint8Array {
   }
 
   return input;
+}
+
+async function encryptLegacyOutput(input: {
+  noteKey: Uint8Array;
+  payload: string;
+}): Promise<Uint8Array> {
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    toArrayBuffer(input.noteKey),
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"],
+  );
+  const encryptedWithTag = new Uint8Array(
+    await globalThis.crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: toArrayBuffer(fixedIv), tagLength: 128 },
+      key,
+      new TextEncoder().encode(input.payload),
+    ),
+  );
+  const ciphertext = encryptedWithTag.slice(0, encryptedWithTag.byteLength - 16);
+  const authTag = encryptedWithTag.slice(encryptedWithTag.byteLength - 16);
+
+  return concatBytes([
+    UTXO_ENCRYPTION_VERSION_V2,
+    fixedIv,
+    authTag,
+    ciphertext,
+  ]);
+}
+
+function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const length = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+
+  return bytes;
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+
+  return buffer;
 }

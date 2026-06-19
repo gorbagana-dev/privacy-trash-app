@@ -6,6 +6,7 @@ import {
   FIELD_SIZE,
   bytesToHex,
   decimalToFieldHex,
+  fieldBytesToDecimal,
   fieldElementDecimalSchema,
 } from "@/field";
 import { encryptedOutputSchema } from "@/notes";
@@ -16,14 +17,20 @@ export const NATIVE_TOKEN_SENTINEL = "11111111111111111111111111111112";
 export const UTXO_ENCRYPTION_VERSION_V2 = Uint8Array.from([
   0, 0, 0, 0, 0, 0, 0, 2,
 ]);
+export const UTXO_ENCRYPTION_VERSION_V3 = Uint8Array.from([
+  0, 0, 0, 0, 0, 0, 0, 3,
+]);
 
 const safeOutputIndexSchema = z
   .number()
   .int()
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER);
+const nativeAssetKind = 0;
+const compactPayloadBytes = 49;
 
 const rawDecryptedPayloadSchema = z.strictObject({
+  encryptionVersion: z.enum(["v2", "v3"]),
   amountLamports: z.bigint().nonnegative(),
   blinding: fieldElementDecimalSchema,
   index: safeOutputIndexSchema,
@@ -39,7 +46,7 @@ export type PoseidonHasher = {
 };
 
 export const utxoWitnessSchema = z.strictObject({
-  version: z.literal("v2"),
+  version: z.enum(["v2", "v3"]),
   amountLamports: positiveLamportsSchema,
   blinding: fieldElementDecimalSchema,
   index: safeOutputIndexSchema,
@@ -69,11 +76,13 @@ export function createUtxoDecryptor(
       const noteKey = noteKeySchema.parse(decryptInput.noteKey);
       const encryptedBytes = hexToBytes(encryptedOutput);
 
-      if (!startsWithBytes(encryptedBytes, UTXO_ENCRYPTION_VERSION_V2)) {
+      const encryptionVersion = getEncryptionVersion(encryptedBytes);
+
+      if (encryptionVersion === null) {
         return null;
       }
 
-      const decrypted = await decryptV2({
+      const decrypted = await decryptAesGcm({
         crypto: input.crypto,
         noteKey,
         encryptedBytes,
@@ -81,7 +90,10 @@ export function createUtxoDecryptor(
 
       if (decrypted === null) return null;
 
-      const rawPayload = parseDecryptedPayload(new TextDecoder().decode(decrypted));
+      const rawPayload =
+        encryptionVersion === "v2"
+          ? parseLegacyPayload(new TextDecoder().decode(decrypted))
+          : parseCompactPayload(decrypted);
 
       if (
         rawPayload.amountLamports === 0n ||
@@ -92,14 +104,60 @@ export function createUtxoDecryptor(
 
       return createDecryptedOwnedNote({
         hasher: input.hasher,
-        payload: decryptedPayloadSchema.parse(rawPayload),
+        payload: decryptedPayloadSchema.parse({
+          ...rawPayload,
+          index: safeOutputIndexSchema.parse(decryptInput.outputIndex),
+        }),
         noteKey,
       });
     },
   };
 }
 
-async function decryptV2(input: {
+export function deriveUtxoPrivateKey(noteKey: Uint8Array): string {
+  return fieldFromBytes(keccak_256(noteKeySchema.parse(noteKey)));
+}
+
+export function deriveUtxoPublicKey(input: {
+  hasher: PoseidonHasher;
+  noteKey: Uint8Array;
+}): string {
+  return fieldElementDecimalSchema.parse(
+    input.hasher.poseidonHashString([deriveUtxoPrivateKey(input.noteKey)]),
+  );
+}
+
+export function rederiveUtxoWitness(input: {
+  hasher: PoseidonHasher;
+  witness: UtxoWitness;
+  outputIndex: number;
+}): UtxoWitness {
+  const witness = utxoWitnessSchema.parse(input.witness);
+  const outputIndex = safeOutputIndexSchema.parse(input.outputIndex);
+  const signature = fieldElementDecimalSchema.parse(
+    input.hasher.poseidonHashString([
+      witness.privateKey,
+      witness.commitment,
+      outputIndex.toString(),
+    ]),
+  );
+  const nullifier = fieldElementDecimalSchema.parse(
+    input.hasher.poseidonHashString([
+      witness.commitment,
+      outputIndex.toString(),
+      signature,
+    ]),
+  );
+
+  return utxoWitnessSchema.parse({
+    ...witness,
+    index: outputIndex,
+    nullifier,
+    nullifierHex: decimalToFieldHex(nullifier),
+  });
+}
+
+async function decryptAesGcm(input: {
   crypto: Pick<Crypto, "subtle"> | undefined;
   noteKey: Uint8Array;
   encryptedBytes: Uint8Array;
@@ -148,8 +206,11 @@ function createDecryptedOwnedNote(input: {
   payload: z.infer<typeof decryptedPayloadSchema>;
   noteKey: Uint8Array;
 }): DecryptedOwnedNote {
-  const privateKey = fieldFromBytes(keccak_256(input.noteKey));
-  const publicKey = input.hasher.poseidonHashString([privateKey]);
+  const privateKey = deriveUtxoPrivateKey(input.noteKey);
+  const publicKey = deriveUtxoPublicKey({
+    hasher: input.hasher,
+    noteKey: input.noteKey,
+  });
   const commitment = input.hasher.poseidonHashString([
     input.payload.amountLamports.toString(),
     publicKey,
@@ -168,7 +229,7 @@ function createDecryptedOwnedNote(input: {
   ]);
   const nullifierHex = decimalToFieldHex(nullifier);
   const witness = utxoWitnessSchema.parse({
-    version: "v2",
+    version: input.payload.encryptionVersion,
     amountLamports: input.payload.amountLamports,
     blinding: input.payload.blinding,
     index: input.payload.index,
@@ -188,7 +249,7 @@ function createDecryptedOwnedNote(input: {
   };
 }
 
-function parseDecryptedPayload(value: string): z.infer<typeof rawDecryptedPayloadSchema> {
+function parseLegacyPayload(value: string): z.infer<typeof rawDecryptedPayloadSchema> {
   const parts = value.split("|");
 
   if (parts.length !== 4) {
@@ -207,10 +268,40 @@ function parseDecryptedPayload(value: string): z.infer<typeof rawDecryptedPayloa
   }
 
   return rawDecryptedPayloadSchema.parse({
+    encryptionVersion: "v2",
     amountLamports: parseDecimalBigInt(amount, "UTXO amount"),
     blinding,
     index: Number(index),
     mintAddress,
+  });
+}
+
+function parseCompactPayload(
+  payload: Uint8Array,
+): z.infer<typeof rawDecryptedPayloadSchema> {
+  if (payload.byteLength !== compactPayloadBytes) {
+    throw new Error("Invalid compact UTXO payload length.");
+  }
+
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const assetKind = payload[0];
+
+  if (assetKind !== nativeAssetKind) {
+    throw new Error("Unsupported compact UTXO asset kind.");
+  }
+
+  const index = view.getBigUint64(9, true);
+
+  if (index > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("Compact UTXO index exceeds the safe integer range.");
+  }
+
+  return rawDecryptedPayloadSchema.parse({
+    encryptionVersion: "v3",
+    amountLamports: view.getBigUint64(1, true),
+    blinding: fieldBytesToDecimal(payload.slice(17, 49)),
+    index: Number(index),
+    mintAddress: NATIVE_TOKEN_SENTINEL,
   });
 }
 
@@ -220,6 +311,13 @@ function parseDecimalBigInt(value: string, label: string): bigint {
   }
 
   return BigInt(value);
+}
+
+function getEncryptionVersion(bytes: Uint8Array): "v2" | "v3" | null {
+  if (startsWithBytes(bytes, UTXO_ENCRYPTION_VERSION_V2)) return "v2";
+  if (startsWithBytes(bytes, UTXO_ENCRYPTION_VERSION_V3)) return "v3";
+
+  return null;
 }
 
 function fieldFromBytes(bytes: Uint8Array): string {

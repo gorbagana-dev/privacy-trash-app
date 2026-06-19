@@ -24,6 +24,14 @@ export function fieldHexToBytes(value: string): Uint8Array {
   return hexToBytes(fieldElementHexSchema.parse(value));
 }
 
+export function fieldBytesToDecimal(bytes: Uint8Array): string {
+  if (bytes.byteLength !== 32) {
+    throw new Error("Expected a 32-byte scalar field element.");
+  }
+
+  return fieldElementDecimalSchema.parse(BigInt(`0x${bytesToHex(bytes)}`).toString());
+}
+
 export function decimalToFieldHex(value: string): string {
   return BigInt(fieldElementDecimalSchema.parse(value))
     .toString(16)

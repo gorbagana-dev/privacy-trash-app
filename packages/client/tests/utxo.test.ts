@@ -34,6 +34,7 @@ describe("utxo", () => {
         ownerAddress,
         noteKey,
         encryptedOutput,
+        outputIndex: 7,
       }),
     ).resolves.toEqual({
       commitment: "1002",
@@ -89,8 +90,45 @@ describe("utxo", () => {
         ownerAddress,
         noteKey: keccak_256(new Uint8Array([9, 9, 9])),
         encryptedOutput,
+        outputIndex: 7,
       }),
     ).resolves.toBeNull();
+  });
+
+  it("derives nullifiers from the indexed output position, not the encrypted payload index", async () => {
+    const noteKey = keccak_256(new Uint8Array([1, 2, 3]));
+    const encryptedOutput = await encryptUtxoPayload({
+      noteKey,
+      payload: `100|9|99|${NATIVE_TOKEN_SENTINEL}`,
+    });
+    const hasher = createSequencedHasher(["1001", "1002", "1003", "1004"]);
+    const decryptor = createUtxoDecryptor({ hasher });
+
+    await expect(
+      decryptor.decryptOwnedNote({
+        programAddress,
+        ownerAddress,
+        noteKey,
+        encryptedOutput,
+        outputIndex: 7,
+      }),
+    ).resolves.toMatchObject({
+      witness: {
+        index: 7,
+        nullifier: "1004",
+        nullifierHex,
+      },
+    });
+    expect(hasher.poseidonHashString).toHaveBeenNthCalledWith(3, [
+      expect.stringMatching(/^\d+$/),
+      "1002",
+      "7",
+    ]);
+    expect(hasher.poseidonHashString).toHaveBeenNthCalledWith(4, [
+      "1002",
+      "7",
+      "1003",
+    ]);
   });
 
   it("returns null for zero-value and non-native UTXOs", async () => {
@@ -113,6 +151,7 @@ describe("utxo", () => {
         ownerAddress,
         noteKey,
         encryptedOutput: zeroValueOutput,
+        outputIndex: 7,
       }),
     ).resolves.toBeNull();
     await expect(
@@ -121,6 +160,7 @@ describe("utxo", () => {
         ownerAddress,
         noteKey,
         encryptedOutput: splOutput,
+        outputIndex: 7,
       }),
     ).resolves.toBeNull();
   });
@@ -141,6 +181,7 @@ describe("utxo", () => {
         ownerAddress,
         noteKey,
         encryptedOutput,
+        outputIndex: 7,
       }),
     ).rejects.toThrow("Invalid decrypted UTXO payload");
   });

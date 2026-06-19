@@ -36,9 +36,16 @@ export type MerkleProofDto = {
   proofs: CommitmentMerkleProofDto[];
 };
 
+export type MerkleStateDto = {
+  treeHeight: number;
+  root: string;
+  nextIndex: number;
+};
+
 export type MerkleService = {
   getPath(outputIndex: bigint): Promise<MerklePathDto | null>;
   getProofByCommitments(commitments: string[]): Promise<MerkleProofDto>;
+  getState(): Promise<MerkleStateDto>;
 };
 
 export type CreateMerkleServiceInput = {
@@ -81,7 +88,27 @@ function zeroProof(commitmentHex: string): CommitmentMerkleProofDto {
 export function createMerkleService(input: CreateMerkleServiceInput): MerkleService {
   const getHasher = input.getHasher ?? (() => WasmFactory.getInstance());
 
+  async function buildTree(): Promise<MerkleTree> {
+    const rows = await input.poolRepository.listOutputsForTree(input.programId);
+    ensureContiguousOutputs(rows);
+
+    const hasher = await getHasher();
+    const commitments = rows.map((row) => hexFieldToDecimal(row.commitment));
+
+    return new MerkleTree(MERKLE_TREE_HEIGHT, hasher, commitments);
+  }
+
   return {
+    async getState() {
+      const tree = await buildTree();
+
+      return {
+        treeHeight: MERKLE_TREE_HEIGHT,
+        root: tree.root(),
+        nextIndex: tree.nextIndex(),
+      };
+    },
+
     async getPath(outputIndex) {
       const requestedIndex = outputIndexToNumber(outputIndex);
       const rows = await input.poolRepository.listOutputsForTree(input.programId);

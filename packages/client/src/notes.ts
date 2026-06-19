@@ -14,6 +14,11 @@ export const encryptedOutputSchema = z
   })
   .transform((value) => value.toLowerCase());
 
+export const indexedEncryptedOutputSchema = z.strictObject({
+  outputIndex: safeIntegerSchema,
+  encryptedOutput: encryptedOutputSchema,
+});
+
 const noteScopeSchema = z.strictObject({
   programAddress: addressSchema,
   ownerAddress: addressSchema,
@@ -24,10 +29,14 @@ const noteBackupFieldsSchema = z.strictObject({
   programAddress: addressSchema,
   ownerAddress: addressSchema,
   exportedAt: isoTimestampSchema,
-  encryptedOutputs: z.array(encryptedOutputSchema),
+  encryptedOutputs: z.array(encryptedOutputSchema).optional(),
+  indexedOutputs: z.array(indexedEncryptedOutputSchema).optional(),
   fetchOffset: safeIntegerSchema,
   historyIndexes: z.array(safeIntegerSchema),
-});
+}).refine(
+  (value) => value.encryptedOutputs !== undefined || value.indexedOutputs !== undefined,
+  "Note backup must include indexedOutputs or encryptedOutputs.",
+);
 
 export const noteBackupSchema =
   noteBackupFieldsSchema.transform(normalizeNoteBackup);
@@ -41,6 +50,7 @@ export type KeyValueStorage = {
 export type NoteScope = z.input<typeof noteScopeSchema>;
 export type NoteBackupInput = z.input<typeof noteBackupSchema>;
 export type NoteBackup = z.infer<typeof noteBackupSchema>;
+export type IndexedEncryptedOutput = z.infer<typeof indexedEncryptedOutputSchema>;
 
 export type ExportNotesInput = NoteScope & {
   storage: KeyValueStorage;
@@ -87,9 +97,9 @@ export function mergeNoteBackups(
     programAddress: existing.programAddress,
     ownerAddress: existing.ownerAddress,
     exportedAt: maxIsoTimestamp(existing.exportedAt, incoming.exportedAt),
-    encryptedOutputs: [
-      ...existing.encryptedOutputs,
-      ...incoming.encryptedOutputs,
+    indexedOutputs: [
+      ...existing.indexedOutputs,
+      ...incoming.indexedOutputs,
     ],
     fetchOffset: Math.max(existing.fetchOffset, incoming.fetchOffset),
     historyIndexes: [...existing.historyIndexes, ...incoming.historyIndexes],
@@ -159,10 +169,22 @@ export function createNoteStore(storage: KeyValueStorage): NoteStore {
 
 function normalizeNoteBackup(
   value: z.infer<typeof noteBackupFieldsSchema>,
-): z.infer<typeof noteBackupFieldsSchema> {
+): {
+  version: typeof NOTE_BACKUP_VERSION;
+  programAddress: string;
+  ownerAddress: string;
+  exportedAt: string;
+  encryptedOutputs: string[];
+  indexedOutputs: IndexedEncryptedOutput[];
+  fetchOffset: number;
+  historyIndexes: number[];
+} {
+  const indexedOutputs = normalizeIndexedOutputs(value);
+
   return {
     ...value,
-    encryptedOutputs: unique(value.encryptedOutputs),
+    encryptedOutputs: indexedOutputs.map((output) => output.encryptedOutput),
+    indexedOutputs,
     historyIndexes: unique(value.historyIndexes)
       .sort((left, right) => right - left)
       .slice(0, MAX_HISTORY_INDEXES),
@@ -196,7 +218,7 @@ function createEmptyBackup(
     programAddress: scope.programAddress,
     ownerAddress: scope.ownerAddress,
     exportedAt,
-    encryptedOutputs: [],
+    indexedOutputs: [],
     fetchOffset: 0,
     historyIndexes: [],
   });
@@ -238,4 +260,56 @@ function unique<T>(values: readonly T[]): T[] {
 
 function maxIsoTimestamp(left: string, right: string): string {
   return Date.parse(left) >= Date.parse(right) ? left : right;
+}
+
+function normalizeIndexedOutputs(
+  value: z.infer<typeof noteBackupFieldsSchema>,
+): IndexedEncryptedOutput[] {
+  const hasIndexedOutputs = value.indexedOutputs !== undefined;
+  const rawOutputs =
+    value.indexedOutputs ??
+    value.encryptedOutputs?.map((encryptedOutput, outputIndex) => ({
+      outputIndex,
+      encryptedOutput,
+    })) ??
+    [];
+  const byIndex = new Map<number, string>();
+  const indexByEncryptedOutput = new Map<string, number>();
+
+  for (const rawOutput of rawOutputs) {
+    const output = indexedEncryptedOutputSchema.parse(rawOutput);
+    const existing = byIndex.get(output.outputIndex);
+
+    if (existing !== undefined && existing !== output.encryptedOutput) {
+      throw new Error(
+        `Note backup has conflicting encrypted outputs for output index ${output.outputIndex}.`,
+      );
+    }
+
+    const existingIndex = indexByEncryptedOutput.get(output.encryptedOutput);
+
+    if (existingIndex !== undefined && existingIndex !== output.outputIndex) {
+      if (!hasIndexedOutputs) {
+        continue;
+      }
+
+      throw new Error(
+        `Note backup has duplicate encrypted output at indexes ${existingIndex} and ${output.outputIndex}.`,
+      );
+    }
+
+    if (existingIndex !== undefined) {
+      continue;
+    }
+
+    byIndex.set(output.outputIndex, output.encryptedOutput);
+    indexByEncryptedOutput.set(output.encryptedOutput, output.outputIndex);
+  }
+
+  return [...byIndex.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([outputIndex, encryptedOutput]) => ({
+      outputIndex,
+      encryptedOutput,
+    }));
 }

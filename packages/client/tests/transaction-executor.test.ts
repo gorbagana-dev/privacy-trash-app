@@ -39,6 +39,7 @@ const latestBlockhash = {
 };
 const createdAt = "2026-06-18T00:00:00.000Z";
 const encodedTransaction = "AQIDBA==" as Base64EncodedWireTransaction;
+const oversizedEncodedTransaction = "A".repeat(1644) as Base64EncodedWireTransaction;
 const signature =
   "4ap58hFAEEzFrPFgdxUaaTmJA7iMzSdcLXFTuA6JHbH6KX5gQ3MFu2WqUC2p61wmDhgjNLk6v4Ge3QoX8Api6Tua" as Signature;
 
@@ -80,6 +81,50 @@ describe("transaction executor", () => {
       replaceRecentBlockhash: false,
       sigVerify: false,
     });
+  });
+
+  it("compresses transaction messages before compiling", async () => {
+    const rpc = createRpc();
+    const originalInput = createExecutionInput();
+    const compressedMessage = createTransactionMessage();
+    const compressTransactionMessage = vi.fn(() => compressedMessage);
+    const compileTransactionMessage = vi.fn(() => createRuntimeTransaction());
+    const executor = createTransactionExecutor({
+      rpc,
+      compressTransactionMessage,
+      compileTransactionMessage,
+      encodeTransaction: vi.fn(() => encodedTransaction),
+    });
+
+    await expect(executor.simulateTransaction(originalInput)).resolves.toEqual({
+      ok: true,
+      logs: [],
+    });
+    expect(compressTransactionMessage).toHaveBeenCalledWith(
+      originalInput.transactionMessage,
+    );
+    expect(compileTransactionMessage).toHaveBeenCalledWith(compressedMessage);
+  });
+
+  it("rejects oversized transactions before sending them to RPC", async () => {
+    const rpc = createRpc();
+    const executor = createTransactionExecutor({
+      rpc,
+      compileTransactionMessage: vi.fn(() => createRuntimeTransaction()),
+      encodeTransaction: vi.fn(() => oversizedEncodedTransaction),
+    });
+
+    await expect(
+      executor.simulateTransaction(createExecutionInput()),
+    ).rejects.toMatchObject({
+      code: "transaction_too_large",
+      details: {
+        rawBytes: 1233,
+        encodedBytes: 1644,
+        maxBytes: 1232,
+      },
+    } satisfies Partial<TransactionExecutorError>);
+    expect(rpc.simulateTransaction).not.toHaveBeenCalled();
   });
 
   it("signs, sends, and waits for confirmation", async () => {
@@ -124,8 +169,42 @@ describe("transaction executor", () => {
       skipPreflight: false,
     });
     expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(2);
+    expect(rpc.getSignatureStatuses).toHaveBeenNthCalledWith(1, [signature]);
+    expect(rpc.getSignatureStatuses).toHaveBeenNthCalledWith(2, [signature]);
     expect(rpc.getBlockHeight).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(1);
+  });
+
+  it("passes signature-history search only when explicitly configured", async () => {
+    const rpc = createRpc({
+      statusResponses: [
+        {
+          value: [
+            {
+              confirmationStatus: "confirmed",
+              err: null,
+              slot: 55n,
+            },
+          ],
+        },
+      ],
+    });
+    const executor = createTransactionExecutor({
+      rpc,
+      signTransactionMessage: vi.fn(async () => createRuntimeTransaction()),
+      encodeTransaction: vi.fn(() => encodedTransaction),
+      getTransactionSignature: vi.fn(() => signature),
+      searchTransactionHistory: true,
+    });
+
+    await expect(
+      executor.sendTransaction(createExecutionInput()),
+    ).resolves.toMatchObject({
+      signature,
+    });
+    expect(rpc.getSignatureStatuses).toHaveBeenCalledWith([signature], {
+      searchTransactionHistory: true,
+    });
   });
 
   it("normalizes simulation failures", async () => {
@@ -205,7 +284,7 @@ function createExecutionInput() {
   const preparedTransfer = createPreparedTransfer(transactionMessage);
 
   return {
-    preparedTransfer,
+    preparedOperation: preparedTransfer,
     transactionMessage,
   };
 }

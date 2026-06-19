@@ -47,6 +47,10 @@ function createBackup(encryptedOutputs = ["aa", "bb", "cc"]): NoteBackup {
     ownerAddress,
     exportedAt: "2026-06-18T00:00:00.000Z",
     encryptedOutputs,
+    indexedOutputs: encryptedOutputs.map((encryptedOutput, outputIndex) => ({
+      outputIndex,
+      encryptedOutput,
+    })),
     fetchOffset: encryptedOutputs.length,
     historyIndexes: [],
   };
@@ -73,16 +77,26 @@ function createTransferInput(
 function createOwnedNote(input: {
   commitment: string;
   encryptedOutput: string;
+  outputIndex?: number | undefined;
   nullifier?: string | undefined;
   amountLamports: bigint;
 }): OwnedNote {
   return {
     ...input,
+    outputIndex: input.outputIndex ?? getDefaultOutputIndex(input.encryptedOutput),
     nullifier: input.nullifier ?? input.commitment.replace(/^./, "f"),
     witness: {
       secret: input.commitment,
     },
   };
+}
+
+function getDefaultOutputIndex(encryptedOutput: string): number {
+  return {
+    aa: 0,
+    bb: 1,
+    cc: 2,
+  }[encryptedOutput] ?? 0;
 }
 
 function createStore(notes: unknown): OwnedNoteStore {
@@ -162,6 +176,7 @@ describe("owned", () => {
         {
           commitment: commitmentC,
           encryptedOutput: "cc",
+          outputIndex: 2,
           nullifier: nullifierC,
           amountLamports: 20n,
           witness: {
@@ -209,6 +224,7 @@ describe("owned", () => {
         {
           commitment: commitmentC,
           encryptedOutput: "cc",
+          outputIndex: 2,
           nullifier: nullifierC,
           amountLamports: 9n,
           witness: {
@@ -218,6 +234,7 @@ describe("owned", () => {
         {
           commitment: commitmentB,
           encryptedOutput: "bb",
+          outputIndex: 1,
           nullifier: nullifierB,
           amountLamports: 8n,
           witness: {
@@ -398,6 +415,7 @@ describe("owned", () => {
       {
         commitment: commitmentA,
         encryptedOutput: "aa",
+        outputIndex: 0,
         nullifier: nullifierA,
         amountLamports: 4n,
         witness: { secret: commitmentA },
@@ -418,12 +436,14 @@ describe("owned", () => {
       ownerAddress,
       noteKey: new Uint8Array(32).fill(9),
       encryptedOutput: "aa",
+      outputIndex: 0,
     });
     expect(decryptor.decryptOwnedNote).toHaveBeenCalledWith({
       programAddress,
       ownerAddress,
       noteKey: new Uint8Array(32).fill(9),
       encryptedOutput: "bb",
+      outputIndex: 1,
     });
   });
 

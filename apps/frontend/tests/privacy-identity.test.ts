@@ -57,16 +57,13 @@ describe("privacy identity message", () => {
       }),
     ).toBe(`Privacy Trash
 
-Sign this message to unlock your private GOR notes.
-
-This signature is used only to derive your local Privacy Trash encryption key.
-It does not authorize a transaction, transfer funds, or give access to your wallet.
-Only sign this message on a Privacy Trash site you trust.
-
-Network: Gorbagana
+Purpose: Unlock encrypted private GOR notes
+Cluster: Gorbagana
 Program: ${programAddress}
-Wallet: ${walletAddress}
-Version: 1`);
+Version: 1
+
+This signature is used only to derive your local note key.
+It cannot move funds or approve transactions.`);
   });
 
   it("does not include timestamp or nonce fields", () => {

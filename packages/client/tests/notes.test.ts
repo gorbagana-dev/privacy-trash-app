@@ -46,8 +46,59 @@ describe("notes", () => {
   it("normalizes note backups", () => {
     expect(createNoteBackup(createBackup())).toMatchObject({
       encryptedOutputs: ["aabb", "cc"],
+      indexedOutputs: [
+        {
+          outputIndex: 0,
+          encryptedOutput: "aabb",
+        },
+        {
+          outputIndex: 2,
+          encryptedOutput: "cc",
+        },
+      ],
       historyIndexes: [2, 1],
     });
+  });
+
+  it("prefers indexed encrypted outputs when present", () => {
+    expect(
+      createNoteBackup({
+        ...createBackup(),
+        encryptedOutputs: ["FFFF"],
+        indexedOutputs: [
+          {
+            outputIndex: 7,
+            encryptedOutput: "AABB",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      encryptedOutputs: ["aabb"],
+      indexedOutputs: [
+        {
+          outputIndex: 7,
+          encryptedOutput: "aabb",
+        },
+      ],
+    });
+  });
+
+  it("rejects duplicate encrypted outputs with different indexes", () => {
+    expect(() =>
+      createNoteBackup({
+        ...createBackup(),
+        indexedOutputs: [
+          {
+            outputIndex: 4,
+            encryptedOutput: "AABB",
+          },
+          {
+            outputIndex: 8,
+            encryptedOutput: "AABB",
+          },
+        ],
+      }),
+    ).toThrow("duplicate encrypted output");
   });
 
   it("imports, exports, and clears notes in scoped storage", () => {

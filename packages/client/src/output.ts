@@ -7,6 +7,7 @@ import {
 } from "@/encryption";
 import {
   bytesToHex,
+  fieldDecimalToBytes,
   fieldElementDecimalSchema,
 } from "@/field";
 import type {
@@ -19,13 +20,16 @@ import type {
 import { addressSchema, nonEmptyBytesSchema } from "@/schemas";
 import {
   NATIVE_TOKEN_SENTINEL,
-  UTXO_ENCRYPTION_VERSION_V2,
+  UTXO_ENCRYPTION_VERSION_V3,
 } from "@/utxo";
 
 const aesGcmIvBytes = 12;
 const aesGcmTagBytes = 16;
+const outputPayloadAssetNative = 0;
+const compactOutputPayloadBytes = 49;
+const u64Max = (1n << 64n) - 1n;
 const outputPayloadSchema = z.strictObject({
-  amountLamports: z.bigint().nonnegative(),
+  amountLamports: z.bigint().nonnegative().max(u64Max),
   blinding: fieldElementDecimalSchema,
   index: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   mintAddress: z.literal(NATIVE_TOKEN_SENTINEL),
@@ -116,7 +120,7 @@ export async function encryptOutputPayload(input: {
         tagLength: 128,
       },
       key,
-      new TextEncoder().encode(serializeOutputPayload(payload)),
+      toArrayBuffer(encodeOutputPayload(payload)),
     ),
   );
   const ciphertext = encryptedWithTag.slice(
@@ -128,7 +132,7 @@ export async function encryptOutputPayload(input: {
   );
 
   return concatBytes([
-    UTXO_ENCRYPTION_VERSION_V2,
+    UTXO_ENCRYPTION_VERSION_V3,
     iv,
     authTag,
     ciphertext,
@@ -144,6 +148,19 @@ export function serializeOutputPayload(input: OutputPayload): string {
     payload.index.toString(),
     payload.mintAddress,
   ].join("|");
+}
+
+export function encodeOutputPayload(input: OutputPayload): Uint8Array {
+  const payload = outputPayloadSchema.parse(input);
+  const bytes = new Uint8Array(compactOutputPayloadBytes);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  bytes[0] = outputPayloadAssetNative;
+  view.setBigUint64(1, payload.amountLamports, true);
+  view.setBigUint64(9, BigInt(payload.index), true);
+  bytes.set(fieldDecimalToBytes(payload.blinding), 17);
+
+  return bytes;
 }
 
 export function createRandomFieldElement(randomBytes: RandomBytes): string {

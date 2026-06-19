@@ -4,9 +4,11 @@ import {
   NATIVE_TOKEN_SENTINEL,
   addressSchema,
   createCircuitProver,
+  createDepositCircuitProver,
   decimalToFieldHex,
   fieldDecimalToBytes,
   fieldHexToBytes,
+  quoteDeposit,
   quoteTransfer,
   type CircuitInput,
   type CircuitInputNote,
@@ -100,6 +102,7 @@ function createInputNote(
   return {
     commitment,
     encryptedOutput: "010203",
+    outputIndex: 0,
     nullifier,
     amountLamports: 2_000_000n,
     witness,
@@ -168,7 +171,7 @@ function createOutputBlinding(): OutputBlinding {
 function createOutputEncryptor(): OutputEncryptor {
   return {
     encryptOutput: vi.fn(async ({ kind }) =>
-      kind === "change" ? bytes(64, 11) : bytes(64, 12),
+      kind === "dummy" ? bytes(64, 12) : bytes(64, 11),
     ),
   };
 }
@@ -245,7 +248,7 @@ describe("circuit", () => {
         ],
       },
       extData: {
-        extAmount: -1_002_506n,
+        extAmount: -1_000_000n,
         fee: 2_506n,
       },
       encryptedOutput1: bytes(64, 11),
@@ -270,12 +273,12 @@ describe("circuit", () => {
       outputCommitments: [decimalToFieldHex("111"), decimalToFieldHex("222")],
     });
     expect(publicInputEncoder.encodePublicAmount).toHaveBeenCalledWith({
-      extAmount: -1_002_506n,
+      extAmount: -1_000_000n,
       fee: 2_506n,
     });
     expect(publicInputEncoder.hashExtData).toHaveBeenCalledWith({
       extData: {
-        extAmount: -1_002_506n,
+        extAmount: -1_000_000n,
         fee: 2_506n,
       },
       recipient: recipientAddress,
@@ -292,7 +295,7 @@ describe("circuit", () => {
         merkleRoot,
         treeHeight: 26,
         extData: {
-          extAmount: -1_002_506n,
+          extAmount: -1_000_000n,
           fee: 2_506n,
         },
         outputs: [
@@ -405,8 +408,147 @@ describe("circuit", () => {
       ),
     ).rejects.toThrow("same private note key");
   });
+
+  it("assembles native deposit proof material with dummy inputs", async () => {
+    const hasher = createSequencedHasher([
+      "11",
+      "111",
+      "222",
+      "333",
+      "444",
+      "555",
+      "666",
+      "777",
+      "888",
+      "999",
+      "1000",
+    ]);
+    const outputBlinding = createOutputBlinding();
+    const outputEncryptor = createOutputEncryptor();
+    const nullifierAccounts = createNullifierAccounts();
+    const publicInputEncoder = createPublicInputEncoder();
+    const proofRunner = createProofRunner();
+    const prover = createDepositCircuitProver({
+      hasher,
+      proofRunner,
+      outputBlinding,
+      outputEncryptor,
+      nullifierAccounts,
+      publicInputEncoder,
+      feeRecipient,
+      randomBytes: createRandomBytes,
+    });
+    const quote = quoteDeposit({
+      lamports: 1_000_000n,
+      depositFeeBps: 25,
+    });
+
+    await expect(
+      prover.proveDeposit({
+        deposit: {
+          programAddress,
+          ownerAddress,
+          quote,
+          unlockSignature: new Uint8Array([1, 2, 3]),
+        },
+        programAddress,
+        ownerAddress,
+        recipient: ownerAddress,
+        merkleRoot,
+        treeHeight: 26,
+        nextIndex: 7,
+      }),
+    ).resolves.toEqual({
+      nullifiers: [
+        nullifierAccount0,
+        nullifierAccount1,
+        nullifierAccount2,
+        nullifierAccount3,
+      ],
+      proof: {
+        proofA: bytes(64, 1),
+        proofB: bytes(128, 2),
+        proofC: bytes(64, 3),
+        root: fieldDecimalToBytes(merkleRoot),
+        publicAmount: bytes(32, 5),
+        extDataHash: bytes(32, 6),
+        inputNullifiers: [
+          fieldHexToBytes(decimalToFieldHex("666")),
+          fieldHexToBytes(decimalToFieldHex("1000")),
+        ],
+        outputCommitments: [
+          fieldDecimalToBytes("111"),
+          fieldDecimalToBytes("222"),
+        ],
+      },
+      extData: {
+        extAmount: 1_000_000n,
+        fee: 2_500n,
+      },
+      encryptedOutput1: bytes(64, 11),
+      encryptedOutput2: bytes(64, 12),
+    });
+    expect(hasher.poseidonHashString).toHaveBeenCalledWith([
+      expect.stringMatching(/^\d+$/),
+    ]);
+    expect(hasher.poseidonHashString).toHaveBeenCalledWith([
+      "997500",
+      "11",
+      "77",
+      NATIVE_TOKEN_SENTINEL,
+    ]);
+    expect(hasher.poseidonHashString).toHaveBeenCalledWith([
+      "0",
+      "11",
+      "88",
+      NATIVE_TOKEN_SENTINEL,
+    ]);
+    expect(publicInputEncoder.encodePublicAmount).toHaveBeenCalledWith({
+      extAmount: 1_000_000n,
+      fee: 2_500n,
+    });
+    expect(proofRunner.prove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: expect.objectContaining({
+          ownerAddress,
+          quote,
+        }),
+        recipient: ownerAddress,
+        extData: {
+          extAmount: 1_000_000n,
+          fee: 2_500n,
+        },
+        outputs: [
+          expect.objectContaining({
+            kind: "deposit",
+            amountLamports: 997_500n,
+            blinding: "77",
+            commitment: "111",
+          }),
+          expect.objectContaining({
+            kind: "dummy",
+            amountLamports: 0n,
+            blinding: "88",
+            commitment: "222",
+          }),
+        ],
+      }),
+    );
+  });
 });
 
 function bytes(length: number, value: number): Uint8Array {
   return new Uint8Array(length).fill(value);
+}
+
+function createSequencedHasher(outputs: string[]): PoseidonHasher {
+  return {
+    poseidonHashString: vi.fn(() => {
+      const output = outputs.shift();
+
+      if (output === undefined) throw new Error("Unexpected hash call.");
+
+      return output;
+    }),
+  };
 }

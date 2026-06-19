@@ -4,9 +4,10 @@ import { z } from "zod";
 
 const portSchema = z.coerce.number().int().min(1).max(65_535);
 const positiveIntegerSchema = z.coerce.number().int().positive();
+const indexerLimitSchema = z.coerce.number().int().min(1).max(1000);
+const indexerProcessLimitSchema = z.coerce.number().int().min(1).max(100);
 const booleanStringSchema = z
   .enum(["true", "false"])
-  .default("false")
   .transform((value) => value === "true");
 const postgresUrlSchema = z
   .string()
@@ -24,7 +25,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   DATABASE_URL: postgresUrlSchema,
   DATABASE_POOL_MAX: positiveIntegerSchema.default(10),
-  DRIZZLE_LOG_QUERIES: booleanStringSchema,
+  DRIZZLE_LOG_QUERIES: booleanStringSchema.default(false),
   API_BODY_LIMIT_BYTES: positiveIntegerSchema.default(1_048_576),
   CORS_ALLOWED_ORIGINS: z
     .string()
@@ -43,6 +44,10 @@ const envSchema = z.object({
     .min(32)
     .default("GGNZHntmkQJvnApZESoUZ8PSmWT9n4jnUDsFrST866se"),
   EXPLORER_BASE_URL: z.url().default("https://explorer.gorbagana.wtf"),
+  INDEXER_AUTO_RUN: booleanStringSchema.default(true),
+  INDEXER_POLL_INTERVAL_MS: positiveIntegerSchema.default(5_000),
+  INDEXER_DISCOVERY_LIMIT: indexerLimitSchema.default(100),
+  INDEXER_PROCESSING_LIMIT: indexerProcessLimitSchema.default(20),
 });
 
 export type Env = z.infer<typeof envSchema>;

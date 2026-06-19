@@ -100,7 +100,12 @@ const statusSchema = z.strictObject({
 const outputRangeSchema = z.strictObject({
   total: safeIntegerSchema,
   hasMore: z.boolean(),
-  encryptedOutputs: z.array(encryptedOutputSchema),
+  outputs: z.array(
+    z.strictObject({
+      outputIndex: safeIntegerSchema,
+      encryptedOutput: encryptedOutputSchema,
+    }),
+  ),
 });
 
 const outputCheckSchema = z.strictObject({
@@ -127,6 +132,12 @@ const merkleProofSchema = z.strictObject({
   proofs: z.array(merkleProofEntrySchema),
 });
 
+const merkleStateSchema = z.strictObject({
+  treeHeight: safeIntegerSchema,
+  root: z.string().regex(/^\d+$/),
+  nextIndex: safeIntegerSchema,
+});
+
 const nullifierStatusSchema = z.strictObject({
   spent: z.boolean(),
   nullifier: fieldElementHexSchema,
@@ -142,6 +153,7 @@ export type OutputRange = z.infer<typeof outputRangeSchema>;
 export type OutputCheck = z.infer<typeof outputCheckSchema>;
 export type OutputIndices = z.infer<typeof outputIndicesSchema>;
 export type MerkleProof = z.infer<typeof merkleProofSchema>;
+export type MerkleState = z.infer<typeof merkleStateSchema>;
 export type NullifierStatus = z.infer<typeof nullifierStatusSchema>;
 
 export type OutputRangeInput = z.input<typeof outputRangeInputSchema>;
@@ -170,6 +182,7 @@ export type Indexer = {
   checkOutput(input: OutputCheckInput): Promise<OutputCheck>;
   getOutputIndices(input: OutputIndicesInput): Promise<OutputIndices>;
   getMerkleProof(input: MerkleProofInput): Promise<MerkleProof>;
+  getMerkleState(): Promise<MerkleState>;
   getNullifierStatus(input: NullifierStatusInput): Promise<NullifierStatus>;
 };
 
@@ -250,6 +263,9 @@ export function createIndexer(input: CreateIndexerInput): Indexer {
       return get("/v1/merkle/proof", merkleProofSchema, {
         commitments: commitments.join(","),
       });
+    },
+    async getMerkleState() {
+      return get("/v1/merkle/state", merkleStateSchema);
     },
     async getNullifierStatus(inputNullifier) {
       const { nullifier } = nullifierStatusInputSchema.parse(inputNullifier);

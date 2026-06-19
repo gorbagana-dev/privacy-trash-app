@@ -8,13 +8,9 @@ import {
   type PrivateNoteScan,
   type ScanPrivateNotesInput,
 } from "@gorbagana/privacy-trash-client/browser";
+import type { Client } from "@gorbagana/privacy-trash-client";
 
-import {
-  BASE_WITHDRAWAL_FEE_LAMPORTS,
-  ESTIMATED_NETWORK_FEE_LAMPORTS,
-  calculateGrossPrivateSpendLamports,
-  calculateProtocolFeeLamports,
-} from "@/features/transfer/logic/fees";
+import { ESTIMATED_NETWORK_FEE_LAMPORTS } from "@/features/transfer/logic/fees";
 import { getHasherWasmInput } from "@/features/transfer/logic/hasher";
 import { privacyIndexer } from "@/features/transfer/logic/indexer";
 import type {
@@ -27,10 +23,12 @@ import {
 } from "@/features/wallet/logic/privacy-identity";
 
 export type PrepareTransferOptions = {
+  client?: Pick<Client, "unlock" | "prepareTransfer"> | undefined;
   getPrivacyIdentity?: (() => Promise<PrivacyIdentity>) | undefined;
   indexer?: Pick<Indexer, "getStatus"> | undefined;
   privateNoteIndexer?: Pick<Indexer, "getOutputRange" | "getNullifierStatus"> | undefined;
   scanPrivateNotes?: ((input: ScanPrivateNotesInput) => Promise<PrivateNoteScan>) | undefined;
+  privacyIdentity?: PrivacyIdentity | undefined;
 };
 
 function toBrowserNoteIdentity(
@@ -67,6 +65,43 @@ function normalizePreparationError(error: unknown): Error {
   return new Error("Unable to prepare transfer.");
 }
 
+async function scanTransferPrivateNotes(input: {
+  identity: PrivacyIdentity;
+  indexer: Pick<Indexer, "getOutputRange" | "getNullifierStatus">;
+  scanNotes: (input: ScanPrivateNotesInput) => Promise<PrivateNoteScan>;
+}): Promise<PrivateNoteScan> {
+  const scanInput = {
+    identity: toBrowserNoteIdentity(input.identity),
+    hasherWasm: getHasherWasmInput(),
+    indexer: input.indexer,
+    programAddress: input.identity.programAddress,
+  } satisfies ScanPrivateNotesInput;
+  const firstScan = await input.scanNotes(scanInput).catch((error: unknown) => {
+    throw normalizePreparationError(error);
+  });
+
+  if (firstScan.unspentNoteCount > 0 || firstScan.totalOutputCount === 0) {
+    return firstScan;
+  }
+
+  return await input.scanNotes({
+    ...scanInput,
+    syncMode: "full",
+  }).catch((error: unknown) => {
+    throw normalizePreparationError(error);
+  });
+}
+
+function createNoPrivateBalanceError(privateNotes: PrivateNoteScan): Error {
+  if (privateNotes.ownedNoteCount > 0) {
+    return new Error("All private notes for this wallet are already spent.");
+  }
+
+  return new Error(
+    "No private balance found for this wallet. If you already deposited, reconnect the same wallet, approve the Privacy Trash unlock signature, and try again after the deposit is indexed.",
+  );
+}
+
 export async function prepareTransfer(
   draft: TransferDraft,
   options: PrepareTransferOptions = {},
@@ -84,59 +119,89 @@ export async function prepareTransfer(
     throw new Error("Privacy pool has no indexed outputs yet.");
   }
 
-  if (!options.getPrivacyIdentity) {
+  if (!options.getPrivacyIdentity && !options.privacyIdentity) {
     throw new Error("Privacy identity is unavailable.");
   }
 
-  let privacyIdentity: PrivacyIdentity;
+  let privacyIdentity: PrivacyIdentity | undefined;
   try {
-    privacyIdentity = await options.getPrivacyIdentity();
+    privacyIdentity =
+      options.privacyIdentity ?? (await options.getPrivacyIdentity?.());
   } catch (error) {
     throw normalizePreparationError(error);
+  }
+
+  if (privacyIdentity === undefined) {
+    throw new Error("Privacy identity is unavailable.");
   }
 
   if (privacyIdentity.walletAddress !== draft.signer) {
     throw new Error("Wallet changed. Reconnect the original wallet and try again.");
   }
 
-  const protocolFeeLamports = calculateProtocolFeeLamports(
-    draft.amountLamports,
-  );
-  const grossPrivateSpendLamports = calculateGrossPrivateSpendLamports(
-    draft.amountLamports,
-  );
   const scanNotes = options.scanPrivateNotes ?? scanPrivateNotes;
-  const privateNotes = await scanNotes({
-    identity: toBrowserNoteIdentity(privacyIdentity),
-    hasherWasm: getHasherWasmInput(),
+  const privateNotes = await scanTransferPrivateNotes({
+    identity: privacyIdentity,
     indexer: options.privateNoteIndexer ?? privacyIndexer,
-    programAddress: privacyIdentity.programAddress,
-  }).catch((error: unknown) => {
-    throw normalizePreparationError(error);
+    scanNotes,
   });
 
   if (privateNotes.unspentNoteCount === 0) {
-    throw new Error("No private balance found for this wallet.");
+    throw createNoPrivateBalanceError(privateNotes);
   }
 
-  if (privateNotes.privateBalanceLamports < grossPrivateSpendLamports) {
+  const client = options.client;
+  const clientPreparedOperation =
+    client === undefined
+      ? undefined
+      : await prepareClientTransfer({
+          client,
+          recipient: draft.recipient,
+          recipientLamports: draft.amountLamports,
+        });
+
+  if (clientPreparedOperation === undefined) {
+    throw new Error("Private transfer client is unavailable.");
+  }
+
+  const quote = clientPreparedOperation.quote;
+
+  if (quote.privateBalanceLamports !== privateNotes.privateBalanceLamports) {
+    throw new Error("Private balance changed while preparing the transfer.");
+  }
+
+  if (privateNotes.privateBalanceLamports < quote.grossWithdrawalLamports) {
     throw new Error("Private balance is too low for this amount and fees.");
   }
 
   return {
-    baseWithdrawalFeeLamports: BASE_WITHDRAWAL_FEE_LAMPORTS,
+    mode: "transfer",
+    baseWithdrawalFeeLamports: quote.withdrawRentFeeLamports,
+    clientPreparedOperation,
     estimatedNetworkFeeLamports: ESTIMATED_NETWORK_FEE_LAMPORTS,
     estimatedTotalFeeLamports:
-      protocolFeeLamports +
-      BASE_WITHDRAWAL_FEE_LAMPORTS +
-      ESTIMATED_NETWORK_FEE_LAMPORTS,
-    grossPrivateSpendLamports,
+      quote.withdrawalFeeLamports + ESTIMATED_NETWORK_FEE_LAMPORTS,
+    grossPrivateSpendLamports: quote.grossWithdrawalLamports,
     privateNotes,
     poolStatus,
     privacyIdentity,
-    protocolFeeLamports,
+    protocolFeeLamports:
+      quote.withdrawalFeeLamports - quote.withdrawRentFeeLamports,
     recipient: draft.recipient,
-    recipientAmountLamports: draft.amountLamports,
+    recipientAmountLamports: quote.recipientLamports,
     signer: draft.signer,
   };
+}
+
+async function prepareClientTransfer(input: {
+  client: Pick<Client, "unlock" | "prepareTransfer">;
+  recipient: string;
+  recipientLamports: bigint;
+}) {
+  await input.client.unlock();
+
+  return await input.client.prepareTransfer({
+    recipient: input.recipient,
+    recipientLamports: input.recipientLamports,
+  });
 }

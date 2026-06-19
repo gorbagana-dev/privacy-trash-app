@@ -1,32 +1,37 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import type {
-  PreparedTransfer,
-  TransferDraft,
+  PreparedPrivateOperation,
+  PrivateOperationReceipt,
+  PrivateOperationDraft,
   TransferFlowStatus,
 } from "@/features/transfer/hooks/use-transfer-flow";
 import { formatAddress } from "@/lib/address";
 import { formatLamportsAsGor } from "@/features/transfer/schemas/transfer.schema";
 
 type ReviewTransferModalProps = {
-  draft: TransferDraft | null;
+  draft: PrivateOperationDraft | null;
   error: string | null;
   onCancel: () => void;
-  onContinue: () => Promise<void>;
-  preparedTransfer: PreparedTransfer | null;
+  onExecute: () => Promise<void>;
+  onPrepare: () => Promise<void>;
+  preparedOperation: PreparedPrivateOperation | null;
+  receipt: PrivateOperationReceipt | null;
   status: TransferFlowStatus;
 };
 
 function ReviewRow({
+  children,
   label,
   value,
   valueTitle,
 }: {
+  children?: ReactNode;
   label: string;
-  value: string;
+  value?: string;
   valueTitle?: string;
 }) {
   return (
@@ -36,9 +41,58 @@ function ReviewRow({
         title={valueTitle ?? value}
         className="max-w-[210px] text-right font-sans text-sm font-semibold break-words text-white"
       >
-        {value}
+        {children ?? value}
       </dd>
     </div>
+  );
+}
+
+function SignatureValue({ signature }: { signature: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setCopied(false), 1_500);
+
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
+
+  const copySignature = async () => {
+    try {
+      await navigator.clipboard.writeText(signature);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <span title={signature}>{formatAddress(signature)}</span>
+      <button
+        type="button"
+        className="cursor-pointer rounded-md border border-white/[0.1] bg-white/[0.04] px-2 py-1 font-sans text-[11px] font-semibold text-zinc-300 uppercase transition hover:border-white/[0.2] hover:bg-white/[0.08] hover:text-white"
+        onClick={() => void copySignature()}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+function ExplorerLink({ href }: { href: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-sans text-sm font-semibold text-[#4dff91] underline-offset-4 transition hover:text-[#67ffa2] hover:underline"
+    >
+      Open transaction
+    </a>
   );
 }
 
@@ -46,16 +100,23 @@ export function ReviewTransferModal({
   draft,
   error,
   onCancel,
-  onContinue,
-  preparedTransfer,
+  onExecute,
+  onPrepare,
+  preparedOperation,
+  receipt,
   status,
 }: ReviewTransferModalProps) {
   const isOpen =
     status === "reviewing" ||
     status === "preparing" ||
     status === "prepared" ||
+    status === "signing" ||
+    status === "submitted" ||
     status === "failed";
   const isPreparing = status === "preparing";
+  const isSigning = status === "signing";
+  const isSubmitted = status === "submitted";
+  const isBusy = isPreparing || isSigning;
   const isPrepared = status === "prepared";
 
   useEffect(() => {
@@ -64,7 +125,7 @@ export function ReviewTransferModal({
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isPreparing) {
+      if (event.key === "Escape" && !isBusy) {
         onCancel();
       }
     };
@@ -72,18 +133,33 @@ export function ReviewTransferModal({
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isPreparing, onCancel]);
+  }, [isBusy, isOpen, onCancel]);
 
   if (!isOpen || !draft) {
     return null;
   }
+
+  const operationLabel = draft.mode === "deposit" ? "Deposit" : "Transfer";
+  const isPreparedOperation = preparedOperation?.mode === draft.mode;
+  const isExecutable = isPreparedOperation && !isSubmitted;
+  const primaryAction = isExecutable ? onExecute : onPrepare;
+  const title = isSubmitted
+    ? `${operationLabel} Complete`
+    : `Review ${operationLabel}`;
+  const primaryLabel = (() => {
+    if (isPreparing) return "Preparing";
+    if (isSigning) return "Signing";
+    if (isExecutable) return `Sign ${operationLabel}`;
+
+    return `Prepare ${operationLabel}`;
+  })();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
       <button
         type="button"
         aria-label="Close transfer review"
-        disabled={isPreparing}
+        disabled={isBusy}
         className="absolute inset-0 cursor-default bg-black/80 backdrop-blur-sm disabled:pointer-events-none"
         onClick={onCancel}
       />
@@ -96,57 +172,97 @@ export function ReviewTransferModal({
       >
         <div>
           <p className="font-heading text-xs font-bold italic tracking-[0.14em] text-[#4dff91] uppercase">
-            Private Transfer
+            Private {operationLabel}
           </p>
           <h2
             id="review-transfer-title"
             className="mt-2 font-heading text-3xl font-bold italic tracking-[-0.04em]"
           >
-            Review Transfer
+            {title}
           </h2>
         </div>
 
         <dl className="mt-5 rounded-lg border border-white/[0.08] bg-white/[0.035] px-4">
-          <ReviewRow label="Recipient receives" value={`${draft.amount} GOR`} />
           <ReviewRow
-            label="Recipient"
-            value={formatAddress(draft.recipient)}
-            valueTitle={draft.recipient}
+            label={draft.mode === "deposit" ? "Private deposit" : "Recipient receives"}
+            value={`${draft.amount} GOR`}
           />
+          {draft.mode === "transfer" ? (
+            <ReviewRow
+              label="Recipient"
+              value={formatAddress(draft.recipient)}
+              valueTitle={draft.recipient}
+            />
+          ) : null}
           <ReviewRow
             label="Wallet"
             value={formatAddress(draft.signer)}
             valueTitle={draft.signer}
           />
           <ReviewRow label="Network" value="Gorbagana" />
-          {preparedTransfer ? (
+          {isPreparedOperation && preparedOperation.mode === "deposit" ? (
+            <>
+              <ReviewRow
+                label="Private output"
+                value={`${formatLamportsAsGor(
+                  preparedOperation.privateOutputLamports,
+                )} GOR`}
+              />
+              <ReviewRow
+                label="Deposit fee"
+                value={`${formatLamportsAsGor(
+                  preparedOperation.depositFeeLamports,
+                )} GOR`}
+              />
+              <ReviewRow
+                label="Tree index"
+                value={preparedOperation.merkleState.nextIndex.toString()}
+              />
+            </>
+          ) : null}
+          {isPreparedOperation && preparedOperation.mode === "transfer" ? (
             <>
               <ReviewRow
                 label="Indexed outputs"
-                value={preparedTransfer.poolStatus.outputCount.toString()}
+                value={preparedOperation.poolStatus.outputCount.toString()}
               />
               <ReviewRow
                 label="Private balance"
                 value={`${formatLamportsAsGor(
-                  preparedTransfer.privateNotes.privateBalanceLamports,
+                  preparedOperation.privateNotes.privateBalanceLamports,
                 )} GOR`}
               />
               <ReviewRow
                 label="Private notes"
-                value={preparedTransfer.privateNotes.unspentNoteCount.toString()}
+                value={preparedOperation.privateNotes.unspentNoteCount.toString()}
               />
               <ReviewRow
                 label="Private spend"
                 value={`${formatLamportsAsGor(
-                  preparedTransfer.grossPrivateSpendLamports,
+                  preparedOperation.grossPrivateSpendLamports,
                 )} GOR`}
               />
               <ReviewRow
                 label="Fees"
                 value={`${formatLamportsAsGor(
-                  preparedTransfer.estimatedTotalFeeLamports,
+                  preparedOperation.estimatedTotalFeeLamports,
                 )} GOR`}
               />
+            </>
+          ) : null}
+          {receipt ? (
+            <>
+              <ReviewRow label="Signature" valueTitle={receipt.signature}>
+                <SignatureValue signature={receipt.signature} />
+              </ReviewRow>
+              {receipt.slot ? (
+                <ReviewRow label="Slot" value={receipt.slot.toString()} />
+              ) : null}
+              {receipt.explorerUrl ? (
+                <ReviewRow label="Explorer" valueTitle={receipt.explorerUrl}>
+                  <ExplorerLink href={receipt.explorerUrl} />
+                </ReviewRow>
+              ) : null}
             </>
           ) : null}
         </dl>
@@ -163,24 +279,35 @@ export function ReviewTransferModal({
         <div className="mt-5 grid grid-cols-2 gap-3">
           <Button
             type="button"
-            disabled={isPreparing}
+            disabled={isBusy}
             className="h-12 rounded-xl border border-white/[0.1] bg-white/[0.04] px-5 font-heading text-sm font-bold italic text-white uppercase hover:border-white/[0.2] hover:bg-white/[0.08] active:scale-[0.98]"
             onClick={onCancel}
           >
-            Cancel
+            {isSubmitted ? `New ${operationLabel}` : "Cancel"}
           </Button>
-          <Button
-            type="button"
-            disabled={isPreparing || isPrepared}
-            className="h-12 rounded-xl bg-[#4dff91] px-5 font-heading text-sm font-bold italic text-black uppercase hover:bg-[#67ffa2] active:scale-[0.98] disabled:bg-[#4dff91] disabled:opacity-50"
-            onClick={() => void onContinue()}
-          >
-            {isPreparing
-              ? "Preparing"
-              : isPrepared
-                ? "Sign Transfer"
-                : "Continue"}
-          </Button>
+          {isSubmitted && receipt?.explorerUrl ? (
+            <a
+              href={receipt.explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-12 cursor-pointer items-center justify-center rounded-xl bg-[#4dff91] px-5 font-heading text-sm font-bold italic text-black uppercase transition hover:bg-[#67ffa2] active:scale-[0.98]"
+            >
+              Open Transaction
+            </a>
+          ) : (
+            <Button
+              type="button"
+              disabled={isBusy || isSubmitted}
+              className="h-12 rounded-xl bg-[#4dff91] px-5 font-heading text-sm font-bold italic text-black uppercase hover:bg-[#67ffa2] active:scale-[0.98] disabled:bg-[#4dff91] disabled:opacity-50"
+              onClick={() => void primaryAction()}
+            >
+              {isSubmitted
+                ? "Complete"
+                : isPrepared && !isExecutable
+                  ? "Prepared"
+                  : primaryLabel}
+            </Button>
+          )}
         </div>
       </div>
     </div>

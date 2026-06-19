@@ -3,6 +3,7 @@ import {
   createTransactionMessage,
   isTransactionSigner,
   setTransactionMessageFeePayer,
+  setTransactionMessageComputeUnitLimit,
   setTransactionMessageLifetimeUsingBlockhash,
   type Address,
   type BlockhashLifetimeConstraint,
@@ -15,7 +16,22 @@ import {
 import { buildTransactInstruction as buildSdkTransactInstruction } from "@gorbagana/privacy-trash-sdk";
 import { z } from "zod";
 
-import { createProofMaterial, type ProofMaterial, type ProofProvider } from "@/proof";
+import {
+  createProofMaterial,
+  proofMaterialSchema,
+  type ProofMaterial,
+  type ProofProvider,
+} from "@/proof";
+import {
+  DEPOSIT_EXECUTION_VERSION,
+  depositReceiptSchema,
+  depositSimulationSchema,
+  preparedDepositSchema,
+  prepareDepositInputSchema,
+  type DepositExecutor,
+  type DepositProofProvider,
+  type PreparedDeposit,
+} from "@/deposit";
 import { addressSchema, httpUrlSchema, isoTimestampSchema } from "@/schemas";
 import {
   TRANSFER_EXECUTION_VERSION,
@@ -31,13 +47,21 @@ import {
 } from "@/transfer";
 
 export const CHAIN_TRANSFER_PAYLOAD_KIND = "privacy-trash.chain-transfer";
+export const CHAIN_DEPOSIT_PAYLOAD_KIND = "privacy-trash.chain-deposit";
+export const DEFAULT_TRANSACT_COMPUTE_UNIT_LIMIT = 1_000_000;
 
 export type ChainTransactionMessage = TransactionMessage &
   TransactionMessageWithFeePayer &
-  TransactionMessageWithBlockhashLifetime;
+  TransactionMessageWithBlockhashLifetime &
+  Extract<TransactionMessage, { version: 0 }>;
 
 export type ChainPayload = {
   kind: typeof CHAIN_TRANSFER_PAYLOAD_KIND;
+  transactionMessage: ChainTransactionMessage;
+};
+
+export type ChainDepositPayload = {
+  kind: typeof CHAIN_DEPOSIT_PAYLOAD_KIND;
   transactionMessage: ChainTransactionMessage;
 };
 
@@ -47,6 +71,7 @@ const blockhashLifetimeSchema = z
     lastValidBlockHeight: z.bigint(),
   })
   .transform((value) => value as BlockhashLifetimeConstraint);
+const computeUnitLimitSchema = z.number().int().positive().max(1_400_000);
 
 const chainTransactionMessageSchema = z
   .looseObject({
@@ -62,14 +87,23 @@ const chainPayloadSchema = z.strictObject({
   transactionMessage: chainTransactionMessageSchema,
 });
 
+const chainDepositPayloadSchema = z.strictObject({
+  kind: z.literal(CHAIN_DEPOSIT_PAYLOAD_KIND),
+  transactionMessage: chainTransactionMessageSchema,
+});
+
 export type ChainRpc = {
   getLatestBlockhash(): {
     send(): Promise<{ value: BlockhashLifetimeConstraint }>;
   };
 };
 
+export type PreparedChainOperation = {
+  payload: unknown;
+};
+
 export type TransactionExecutionInput = {
-  preparedTransfer: PreparedTransfer;
+  preparedOperation: PreparedChainOperation;
   transactionMessage: ChainTransactionMessage;
 };
 
@@ -97,6 +131,20 @@ export type CreateChainExecutorInput = {
   proofProvider: ProofProvider;
   transactionExecutor: TransactionExecutor;
   buildTransactInstruction?: BuildTransactInstruction | undefined;
+  computeUnitLimit?: number | undefined;
+  explorerBaseUrl?: string | undefined;
+  feePayer?: string | undefined;
+  now?: (() => Date) | undefined;
+};
+
+export type CreateDepositChainExecutorInput = {
+  rpc: ChainRpc;
+  signer: TransactionSigner;
+  feeRecipient: string;
+  proofProvider: DepositProofProvider;
+  transactionExecutor: TransactionExecutor;
+  buildTransactInstruction?: BuildTransactInstruction | undefined;
+  computeUnitLimit?: number | undefined;
   explorerBaseUrl?: string | undefined;
   feePayer?: string | undefined;
   now?: (() => Date) | undefined;
@@ -118,6 +166,9 @@ export function createChainExecutor(
       : httpUrlSchema.parse(input.explorerBaseUrl);
   const buildTransactInstruction =
     input.buildTransactInstruction ?? buildDefaultTransactInstruction;
+  const computeUnitLimit = computeUnitLimitSchema.parse(
+    input.computeUnitLimit ?? DEFAULT_TRANSACT_COMPUTE_UNIT_LIMIT,
+  );
   const now = input.now ?? (() => new Date());
 
   return {
@@ -141,13 +192,11 @@ export function createChainExecutor(
       });
       const transactionMessage = appendTransactionMessageInstruction(
         instruction,
-        setTransactionMessageLifetimeUsingBlockhash(
+        createBaseTransactionMessage({
+          feePayer,
           latestBlockhash,
-          setTransactionMessageFeePayer(
-            feePayer,
-            createTransactionMessage({ version: 0 }),
-          ),
-        ),
+          computeUnitLimit,
+        }),
       );
       const payload = chainPayloadSchema.parse({
         kind: CHAIN_TRANSFER_PAYLOAD_KIND,
@@ -169,7 +218,7 @@ export function createChainExecutor(
       const payload = getChainPayload(parsedTransfer);
       const rawSimulation =
         await input.transactionExecutor.simulateTransaction({
-          preparedTransfer: parsedTransfer,
+          preparedOperation: parsedTransfer,
           transactionMessage: payload.transactionMessage,
         });
 
@@ -179,7 +228,7 @@ export function createChainExecutor(
       const parsedTransfer = preparedTransferSchema.parse(preparedTransfer);
       const payload = getChainPayload(parsedTransfer);
       const rawReceipt = await input.transactionExecutor.sendTransaction({
-        preparedTransfer: parsedTransfer,
+        preparedOperation: parsedTransfer,
         transactionMessage: payload.transactionMessage,
       });
 
@@ -192,6 +241,101 @@ export function createChainExecutor(
   };
 }
 
+export function createDepositChainExecutor(
+  input: CreateDepositChainExecutorInput,
+): DepositExecutor {
+  if (!isTransactionSigner(input.signer)) {
+    throw new Error("Chain signer must sign transactions.");
+  }
+
+  const signer = input.signer;
+  const feeRecipient = addressSchema.parse(input.feeRecipient);
+  const feePayer = addressSchema.parse(input.feePayer ?? signer.address);
+  const explorerBaseUrl =
+    input.explorerBaseUrl === undefined
+      ? undefined
+      : httpUrlSchema.parse(input.explorerBaseUrl);
+  const buildTransactInstruction =
+    input.buildTransactInstruction ?? buildDefaultTransactInstruction;
+  const computeUnitLimit = computeUnitLimitSchema.parse(
+    input.computeUnitLimit ?? DEFAULT_TRANSACT_COMPUTE_UNIT_LIMIT,
+  );
+  const now = input.now ?? (() => new Date());
+
+  return {
+    async prepareDeposit(prepareInput) {
+      const request = prepareDepositInputSchema.parse(prepareInput);
+
+      if (signer.address !== request.ownerAddress) {
+        throw new Error("Chain signer address must match deposit owner.");
+      }
+
+      const [latestBlockhash, material] = await Promise.all([
+        fetchLatestBlockhash(input.rpc),
+        proofMaterialSchema.parse(
+          await input.proofProvider.createDepositProofMaterial(request),
+        ),
+      ]);
+      const instruction = await buildTransactInstruction({
+        signer,
+        recipient: request.ownerAddress,
+        feeRecipient,
+        material,
+        programAddress: request.programAddress,
+      });
+      const transactionMessage = appendTransactionMessageInstruction(
+        instruction,
+        createBaseTransactionMessage({
+          feePayer,
+          latestBlockhash,
+          computeUnitLimit,
+        }),
+      );
+      const payload = chainDepositPayloadSchema.parse({
+        kind: CHAIN_DEPOSIT_PAYLOAD_KIND,
+        transactionMessage,
+      });
+
+      return preparedDepositSchema.parse({
+        version: DEPOSIT_EXECUTION_VERSION,
+        programAddress: request.programAddress,
+        ownerAddress: request.ownerAddress,
+        recipient: request.ownerAddress,
+        quote: request.quote,
+        createdAt: now().toISOString(),
+        payload,
+      });
+    },
+    async simulateDeposit(preparedDeposit) {
+      const parsedDeposit = preparedDepositSchema.parse(preparedDeposit);
+      const payload = getDepositChainPayload(parsedDeposit);
+      const rawSimulation =
+        await input.transactionExecutor.simulateTransaction({
+          preparedOperation: parsedDeposit,
+          transactionMessage: payload.transactionMessage,
+        });
+
+      return depositSimulationSchema.parse(normalizeSimulation(rawSimulation));
+    },
+    async sendDeposit(preparedDeposit) {
+      const parsedDeposit = preparedDepositSchema.parse(preparedDeposit);
+      const payload = getDepositChainPayload(parsedDeposit);
+      const rawReceipt = await input.transactionExecutor.sendTransaction({
+        preparedOperation: parsedDeposit,
+        transactionMessage: payload.transactionMessage,
+      });
+
+      return depositReceiptSchema.parse(
+        normalizeReceipt({
+          explorerBaseUrl,
+          rawReceipt,
+          sentAt: now().toISOString(),
+        }),
+      );
+    },
+  };
+}
+
 export function getChainPayload(preparedTransfer: PreparedTransfer): ChainPayload {
   const payloadResult = chainPayloadSchema.safeParse(
     preparedTransfer.payload,
@@ -199,6 +343,20 @@ export function getChainPayload(preparedTransfer: PreparedTransfer): ChainPayloa
 
   if (!payloadResult.success) {
     throw new Error("Prepared transfer was not created by the chain executor.");
+  }
+
+  return payloadResult.data;
+}
+
+export function getDepositChainPayload(
+  preparedDeposit: PreparedDeposit,
+): ChainDepositPayload {
+  const payloadResult = chainDepositPayloadSchema.safeParse(
+    preparedDeposit.payload,
+  );
+
+  if (!payloadResult.success) {
+    throw new Error("Prepared deposit was not created by the chain executor.");
   }
 
   return payloadResult.data;
@@ -230,6 +388,23 @@ async function fetchLatestBlockhash(
   }
 
   return response.value;
+}
+
+function createBaseTransactionMessage(input: {
+  feePayer: Address;
+  latestBlockhash: BlockhashLifetimeConstraint;
+  computeUnitLimit: number;
+}): ChainTransactionMessage {
+  return setTransactionMessageComputeUnitLimit(
+    input.computeUnitLimit,
+    setTransactionMessageLifetimeUsingBlockhash(
+      input.latestBlockhash,
+      setTransactionMessageFeePayer(
+        input.feePayer,
+        createTransactionMessage({ version: 0 }),
+      ),
+    ),
+  ) as ChainTransactionMessage;
 }
 
 function normalizeSimulation(input: unknown): TransferSimulation {

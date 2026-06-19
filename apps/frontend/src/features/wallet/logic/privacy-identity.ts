@@ -1,4 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519";
+import {
+  createUnlockMessage,
+} from "@gorbagana/privacy-trash-client/browser";
 import { PublicKey } from "@solana/web3.js";
 
 export const PRIVACY_IDENTITY_VERSION = 1;
@@ -50,22 +53,9 @@ export class PrivacyIdentityError extends Error {
 
 export function buildPrivacyIdentityMessage(input: {
   programAddress: string;
-  walletAddress: string;
+  walletAddress?: string | undefined;
 }) {
-  return [
-    "Privacy Trash",
-    "",
-    "Sign this message to unlock your private GOR notes.",
-    "",
-    "This signature is used only to derive your local Privacy Trash encryption key.",
-    "It does not authorize a transaction, transfer funds, or give access to your wallet.",
-    "Only sign this message on a Privacy Trash site you trust.",
-    "",
-    `Network: ${PRIVACY_IDENTITY_NETWORK}`,
-    `Program: ${input.programAddress}`,
-    `Wallet: ${input.walletAddress}`,
-    `Version: ${PRIVACY_IDENTITY_VERSION}`,
-  ].join("\n");
+  return createUnlockMessage({ programAddress: input.programAddress });
 }
 
 export function encodePrivacyIdentityMessage(message: string): Uint8Array {
@@ -208,7 +198,6 @@ export async function getOrCreatePrivacyIdentity({
 }: GetOrCreatePrivacyIdentityInput): Promise<PrivacyIdentity> {
   const message = buildPrivacyIdentityMessage({
     programAddress,
-    walletAddress,
   });
   const cacheKey = getPrivacyIdentityCacheKey({
     programAddress,

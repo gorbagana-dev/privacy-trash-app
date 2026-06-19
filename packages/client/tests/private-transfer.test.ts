@@ -1,5 +1,6 @@
 import {
   blockhash,
+  getTransactionMessageComputeUnitLimit,
   type Instruction,
   type TransactionSigner,
 } from "@solana/kit";
@@ -7,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CHAIN_TRANSFER_PAYLOAD_KIND,
+  DEFAULT_TRANSACT_COMPUTE_UNIT_LIMIT,
   NATIVE_TOKEN_SENTINEL,
   addressSchema,
   createPrivateTransferExecutor,
@@ -47,7 +49,7 @@ const encryptedOutput = "010203";
 const commitment =
   "118374f434fb827b5a877b197ebec62ab828a4828619a5c4144cc069db260d19";
 const nullifier =
-  "a18374f434fb827b5a877b197ebec62ab828a4828619a5c4144cc069db260d19";
+  "00000000000000000000000000000000000000000000000000000000000003ec";
 
 describe("private transfer", () => {
   it("composes notes, proving, instruction building, and chain preparation", async () => {
@@ -125,7 +127,7 @@ describe("private transfer", () => {
         feeRecipient,
         treeHeight: 26,
         extData: {
-          extAmount: -1_002_506n,
+          extAmount: -1_000_000n,
           fee: 2_506n,
         },
       }),
@@ -152,9 +154,13 @@ describe("private transfer", () => {
     const payload = getChainPayload(prepared);
 
     expect(payload.transactionMessage.version).toBe(0);
-    expect(payload.transactionMessage.instructions).toEqual([
+    expect(getTransactionMessageComputeUnitLimit(payload.transactionMessage)).toBe(
+      DEFAULT_TRANSACT_COMPUTE_UNIT_LIMIT,
+    );
+    expect(payload.transactionMessage.instructions).toHaveLength(2);
+    expect(payload.transactionMessage.instructions[1]).toEqual(
       createInstruction(),
-    ]);
+    );
     expect(payload.transactionMessage.lifetimeConstraint).toEqual(
       latestBlockhash,
     );
@@ -200,7 +206,7 @@ describe("private transfer", () => {
       unitsConsumed: 257_332,
     });
     expect(transactionExecutor.simulateTransaction).toHaveBeenCalledWith({
-      preparedTransfer: prepared,
+      preparedOperation: prepared,
       transactionMessage: getChainPayload(prepared).transactionMessage,
     });
   });
@@ -236,6 +242,12 @@ function createBackup(): NoteBackup {
     ownerAddress,
     exportedAt: createdAt.toISOString(),
     encryptedOutputs: [encryptedOutput],
+    indexedOutputs: [
+      {
+        outputIndex: 0,
+        encryptedOutput,
+      },
+    ],
     fetchOffset: 0,
     historyIndexes: [],
   };
@@ -248,6 +260,7 @@ function createNoteSelector(): NoteSelector {
         {
           commitment,
           encryptedOutput,
+          outputIndex: 0,
           nullifier,
           amountLamports: 2_000_000n,
           witness: createWitness(),
@@ -297,7 +310,7 @@ function createIndexer(): ProverIndexer {
 }
 
 function createHasher(): PoseidonHasher {
-  const outputs = ["111", "222", "333", "444", "555", "666"];
+  const outputs = ["1003", "1004", "111", "222", "333", "444", "555", "666"];
 
   return {
     poseidonHashString: vi.fn(() => {

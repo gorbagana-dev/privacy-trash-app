@@ -16,6 +16,7 @@ import {
   lamportsSchema,
   nonEmptyBytesSchema,
   positiveLamportsSchema,
+  safeIntegerSchema,
 } from "@/schemas";
 import type { NoteSelector } from "@/prover";
 import { prepareTransferInputSchema } from "@/transfer";
@@ -32,6 +33,7 @@ const commitmentSchema = z
 const ownedNoteSchema = z.strictObject({
   commitment: commitmentSchema,
   encryptedOutput: encryptedOutputSchema,
+  outputIndex: safeIntegerSchema,
   nullifier: fieldElementHexSchema,
   amountLamports: positiveLamportsSchema,
   witness: z.unknown(),
@@ -78,6 +80,7 @@ export type CreateOwnedNoteStoreInput = {
 export type DecryptOwnedNoteInput = NoteScope & {
   noteKey: NoteKey;
   encryptedOutput: string;
+  outputIndex: number;
 };
 
 export type OwnedNoteDecryptor = {
@@ -145,12 +148,13 @@ export function createOwnedNoteSource(
       });
       const ownedNotes: OwnedNote[] = [];
 
-      for (const encryptedOutput of backup.encryptedOutputs) {
+      for (const output of backup.indexedOutputs) {
         const decrypted = await input.decryptor.decryptOwnedNote({
           programAddress: scope.programAddress,
           ownerAddress: scope.ownerAddress,
           noteKey: copyBytes(noteKey),
-          encryptedOutput,
+          encryptedOutput: output.encryptedOutput,
+          outputIndex: output.outputIndex,
         });
 
         if (decrypted === null) continue;
@@ -159,7 +163,8 @@ export function createOwnedNoteSource(
         ownedNotes.push(
           ownedNoteSchema.parse({
             ...note,
-            encryptedOutput,
+            encryptedOutput: output.encryptedOutput,
+            outputIndex: output.outputIndex,
           }),
         );
       }
@@ -190,9 +195,11 @@ export function createNoteSelector(input: CreateNoteSelectorInput): NoteSelector
       const notes = z.array(ownedNoteSchema).parse(
         await input.ownedNotes.listOwnedNotes(scope),
       );
-      const knownOutputs = new Set(selectionInput.backup.encryptedOutputs);
+      const knownOutputIndexes = new Set(
+        selectionInput.backup.indexedOutputs.map((output) => output.outputIndex),
+      );
       const selected = pickNotes(
-        notes.filter((note) => knownOutputs.has(note.encryptedOutput)),
+        notes.filter((note) => knownOutputIndexes.has(note.outputIndex)),
         transfer.quote.grossWithdrawalLamports,
       );
 
@@ -204,6 +211,7 @@ export function createNoteSelector(input: CreateNoteSelectorInput): NoteSelector
         inputNotes: selected.map((note) => ({
           commitment: note.commitment,
           encryptedOutput: note.encryptedOutput,
+          outputIndex: note.outputIndex,
           nullifier: note.nullifier,
           amountLamports: note.amountLamports,
           witness: note.witness,

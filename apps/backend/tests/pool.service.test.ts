@@ -115,7 +115,16 @@ describe("createPoolService", () => {
     expect(result).toEqual({
       total: 4,
       hasMore: true,
-      encryptedOutputs: ["ZW5jcnlwdGVkLTE=", "ZW5jcnlwdGVkLTI="],
+      outputs: [
+        {
+          outputIndex: 0,
+          encryptedOutput: "ZW5jcnlwdGVkLTE=",
+        },
+        {
+          outputIndex: 1,
+          encryptedOutput: "ZW5jcnlwdGVkLTI=",
+        },
+      ],
     });
   });
 

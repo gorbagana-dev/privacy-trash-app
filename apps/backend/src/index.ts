@@ -2,9 +2,19 @@ import { serve } from "@hono/node-server";
 
 import { createApp } from "@/api/app";
 import { createDependencies } from "@/dependencies";
+import { createIndexerWorker } from "@/modules/indexer/indexer.worker";
 
 const deps = createDependencies();
 const app = createApp(deps);
+const indexerWorker = deps.env.INDEXER_AUTO_RUN
+  ? createIndexerWorker({
+      discoverLimit: deps.env.INDEXER_DISCOVERY_LIMIT,
+      indexerService: deps.indexerService,
+      logger: deps.logger,
+      pollIntervalMs: deps.env.INDEXER_POLL_INTERVAL_MS,
+      processLimit: deps.env.INDEXER_PROCESSING_LIMIT,
+    })
+  : null;
 
 const server = serve(
   {
@@ -20,6 +30,7 @@ const server = serve(
       },
       "Privacy Trash backend started",
     );
+    indexerWorker?.start();
   },
 );
 
@@ -36,6 +47,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       resolve();
     });
   });
+  await indexerWorker?.stop();
   await deps.close();
 }
 

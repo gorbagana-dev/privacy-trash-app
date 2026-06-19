@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+import {
+  prepareDepositInputSchema,
+  type PrepareDepositInput,
+} from "@/deposit";
+import type { DepositCircuitProver } from "@/circuit";
+import { fieldElementDecimalSchema } from "@/field";
 import type {
   MerkleProof,
   MerkleProofInput,
@@ -18,12 +24,18 @@ import {
   addressSchema,
   fieldElementHexSchema,
   positiveLamportsSchema,
+  safeIntegerSchema,
 } from "@/schemas";
 import {
   prepareTransferInputSchema,
   type PrepareTransferInput,
 } from "@/transfer";
-import { utxoWitnessSchema, type UtxoWitness } from "@/utxo";
+import {
+  rederiveUtxoWitness,
+  utxoWitnessSchema,
+  type PoseidonHasher,
+  type UtxoWitness,
+} from "@/utxo";
 
 const commitmentSchema = z
   .string()
@@ -37,6 +49,7 @@ const commitmentSchema = z
 const spendableNoteSchema = z.strictObject({
   commitment: commitmentSchema,
   encryptedOutput: encryptedOutputSchema,
+  outputIndex: safeIntegerSchema,
   nullifier: fieldElementHexSchema,
   amountLamports: positiveLamportsSchema,
   witness: utxoWitnessSchema,
@@ -44,6 +57,12 @@ const spendableNoteSchema = z.strictObject({
 
 const selectedNotesSchema = z.strictObject({
   inputNotes: z.array(spendableNoteSchema).min(1).max(2),
+});
+
+const merkleStateSchema = z.strictObject({
+  treeHeight: safeIntegerSchema,
+  root: fieldElementDecimalSchema,
+  nextIndex: safeIntegerSchema,
 });
 
 const nullifierStatusSchema = z.object({
@@ -54,6 +73,10 @@ const nullifierStatusSchema = z.object({
 export type ProverIndexer = {
   getMerkleProof(input: MerkleProofInput): Promise<MerkleProof>;
   getNullifierStatus(input: NullifierStatusInput): Promise<unknown>;
+};
+
+export type DepositProverIndexer = {
+  getMerkleState(): Promise<unknown>;
 };
 
 export type SpendableNote = z.infer<typeof spendableNoteSchema>;
@@ -104,9 +127,17 @@ export type CreateProverProofProviderInput = {
   indexer: ProverIndexer;
   noteSelector: NoteSelector;
   circuitProver: CircuitProver;
+  hasher: PoseidonHasher;
   programAddress: string;
   ownerAddress: string;
   now?: (() => Date) | undefined;
+};
+
+export type CreateDepositProofProviderInput = {
+  indexer: DepositProverIndexer;
+  circuitProver: DepositCircuitProver;
+  programAddress: string;
+  ownerAddress: string;
 };
 
 export function createProverProofProvider(
@@ -141,22 +172,64 @@ export function createProverProofProvider(
       );
 
       validateSelectedNotes(selectedNotes, backup);
-      await validateUnspentNotes(input.indexer, selectedNotes);
 
       const merkleProof = await input.indexer.getMerkleProof({
         commitments: selectedNotes.inputNotes.map((note) => note.commitment),
       });
 
       validateMerkleProof(selectedNotes, merkleProof);
+      const indexedNotes = bindSelectedNotesToMerkleProof({
+        selectedNotes,
+        merkleProof,
+        hasher: input.hasher,
+      });
+      await validateUnspentNotes(input.indexer, indexedNotes);
 
       return proofMaterialSchema.parse(
         await input.circuitProver.prove(
           createCircuitInput({
             transfer,
-            selectedNotes,
+            selectedNotes: indexedNotes,
             merkleProof,
           }),
         ),
+      );
+    },
+  };
+}
+
+export function createDepositProofProvider(
+  input: CreateDepositProofProviderInput,
+): {
+  createDepositProofMaterial(input: PrepareDepositInput): Promise<unknown>;
+} {
+  const programAddress = addressSchema.parse(input.programAddress);
+  const ownerAddress = addressSchema.parse(input.ownerAddress);
+
+  return {
+    async createDepositProofMaterial(depositInput) {
+      const deposit = prepareDepositInputSchema.parse(depositInput);
+
+      if (deposit.programAddress !== programAddress) {
+        throw new Error("Deposit program address does not match prover scope.");
+      }
+
+      if (deposit.ownerAddress !== ownerAddress) {
+        throw new Error("Deposit owner address does not match prover scope.");
+      }
+
+      const state = merkleStateSchema.parse(await input.indexer.getMerkleState());
+
+      return proofMaterialSchema.parse(
+        await input.circuitProver.proveDeposit({
+          deposit,
+          programAddress,
+          ownerAddress,
+          recipient: ownerAddress,
+          merkleRoot: state.root,
+          treeHeight: state.treeHeight,
+          nextIndex: state.nextIndex,
+        }),
       );
     },
   };
@@ -166,10 +239,15 @@ function validateSelectedNotes(
   selectedNotes: SelectedNotes,
   backup: NoteBackup,
 ): void {
-  const encryptedOutputs = new Set(backup.encryptedOutputs);
+  const indexedOutputs = new Map(
+    backup.indexedOutputs.map((output) => [
+      output.outputIndex,
+      output.encryptedOutput,
+    ]),
+  );
 
   for (const note of selectedNotes.inputNotes) {
-    if (!encryptedOutputs.has(note.encryptedOutput)) {
+    if (indexedOutputs.get(note.outputIndex) !== note.encryptedOutput) {
       throw new Error("Selected note is not in the local note backup.");
     }
 
@@ -237,6 +315,41 @@ function validateMerkleProof(
       throw new Error("Indexer returned a Merkle proof for the wrong commitment.");
     }
   }
+}
+
+function bindSelectedNotesToMerkleProof(input: {
+  selectedNotes: SelectedNotes;
+  merkleProof: MerkleProof;
+  hasher: PoseidonHasher;
+}): SelectedNotes {
+  const inputNotes = input.selectedNotes.inputNotes.map((note, index) => {
+    const proof = input.merkleProof.proofs[index];
+
+    if (proof === undefined || proof.outputIndex === null) {
+      throw new Error("Missing Merkle proof for selected note.");
+    }
+
+    const outputIndex = Number(proof.outputIndex);
+
+    if (!Number.isSafeInteger(outputIndex)) {
+      throw new Error("Merkle proof output index exceeds the safe integer range.");
+    }
+
+    const witness = rederiveUtxoWitness({
+      hasher: input.hasher,
+      witness: note.witness,
+      outputIndex,
+    });
+
+    return spendableNoteSchema.parse({
+      ...note,
+      outputIndex,
+      nullifier: witness.nullifierHex,
+      witness,
+    });
+  });
+
+  return selectedNotesSchema.parse({ inputNotes });
 }
 
 function createCircuitInput(input: {

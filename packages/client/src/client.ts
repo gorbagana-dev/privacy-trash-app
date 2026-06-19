@@ -1,4 +1,9 @@
-import type { Address, TransactionSigner } from "@solana/kit";
+import type {
+  Address,
+  GetMultipleAccountsApi,
+  Rpc,
+  TransactionSigner,
+} from "@solana/kit";
 
 import type { NoteSyncIndexer, NoteSyncResult } from "@/sync";
 import type {
@@ -9,9 +14,25 @@ import {
   createSignatureNoteKeyDeriver,
 } from "@/encryption";
 import {
+  prepareDeposit as prepareDepositWithExecutor,
+  quoteDeposit,
+  sendDeposit as sendDepositWithExecutor,
+  simulateDeposit as simulateDepositWithExecutor,
+  validatePreparedDeposit,
+  depositRequestSchema,
+  type DepositExecutor,
+  type DepositQuote,
+  type DepositReceipt,
+  type DepositSimulation,
+  type PreparedDeposit,
+} from "@/deposit";
+import {
   createIndexer,
   type IndexerFetch,
 } from "@/indexer";
+import {
+  createAddressLookupTableCompressor,
+} from "@/lookup-tables";
 import {
   createNoteStore,
   type KeyValueStorage,
@@ -35,6 +56,9 @@ import {
 import {
   createPrivateTransferExecutor,
 } from "@/private-transfer";
+import {
+  createPrivateDepositExecutor,
+} from "@/private-deposit";
 import type {
   CreateProofRunnerInput,
   Groth16FullProver,
@@ -78,6 +102,7 @@ export type CreateClientInput = {
   notes: NoteStore;
   pool: PoolReader;
   transfer: TransferExecutor;
+  deposit?: DepositExecutor | undefined;
   programAddress: string;
   indexer?: NoteSyncIndexer | undefined;
 };
@@ -96,6 +121,8 @@ export type CreatePrivateClientInput = {
   indexerTimeoutMs?: number | undefined;
   explorerBaseUrl?: string | undefined;
   feePayer?: string | undefined;
+  computeUnitLimit?: number | undefined;
+  lookupTableAddresses?: readonly string[] | undefined;
   buildTransactInstruction?: BuildTransactInstruction | undefined;
   transaction?: PrivateClientTransactionOptions | undefined;
   crypto?: Pick<Crypto, "subtle"> | undefined;
@@ -136,6 +163,10 @@ export type Client = {
   unlock(): Promise<UnlockResult>;
   isUnlocked(): boolean;
   getPrivateBalance(): Promise<PrivateBalance>;
+  quoteDeposit(input: QuoteDepositInput): Promise<QuotedDeposit>;
+  prepareDeposit(input: QuoteDepositInput): Promise<PreparedDeposit>;
+  simulateDeposit(preparedDeposit: PreparedDeposit): Promise<DepositSimulation>;
+  sendDeposit(preparedDeposit: PreparedDeposit): Promise<DepositReceipt>;
   quoteTransfer(input: QuoteTransferInput): Promise<QuotedTransfer>;
   prepareTransfer(input: QuoteTransferInput): Promise<PreparedTransfer>;
   simulateTransfer(preparedTransfer: PreparedTransfer): Promise<TransferSimulation>;
@@ -151,6 +182,12 @@ export type QuoteTransferInput = {
   recipientLamports: bigint;
 };
 
+export type QuoteDepositInput = {
+  lamports: bigint;
+};
+
+export type QuotedDeposit = DepositQuote;
+
 export type QuotedTransfer = TransferQuote & {
   recipient: Address;
 };
@@ -163,7 +200,7 @@ export function createClient(input: CreateClientInput): Client {
   const wallet = validateWallet(input.wallet);
   const walletAddress = normalizeWalletAddress(wallet);
   const programAddress = addressSchema.parse(input.programAddress);
-  const { indexer, notes, pool, transfer } = input;
+  const { deposit, indexer, notes, pool, transfer } = input;
   let unlockSignature: Uint8Array | null = null;
 
   async function createQuote(
@@ -185,6 +222,26 @@ export function createClient(input: CreateClientInput): Client {
       recipient: request.recipient,
       ...quote,
     };
+  }
+
+  async function createDepositQuote(
+    quoteInput: QuoteDepositInput,
+  ): Promise<QuotedDeposit> {
+    const request = depositRequestSchema.parse(quoteInput);
+    const feeConfig = await getPoolFeeConfig(pool);
+
+    return quoteDeposit({
+      lamports: request.lamports,
+      depositFeeBps: feeConfig.depositFeeBps,
+    });
+  }
+
+  function getDepositExecutor(): DepositExecutor {
+    if (deposit === undefined) {
+      throw new Error("Deposit executor is required for private deposits.");
+    }
+
+    return deposit;
   }
 
   return {
@@ -214,6 +271,50 @@ export function createClient(input: CreateClientInput): Client {
     },
     getPrivateBalance() {
       return getPrivateBalance(pool);
+    },
+    quoteDeposit(quoteInput) {
+      return createDepositQuote(quoteInput);
+    },
+    async prepareDeposit(prepareInput) {
+      if (unlockSignature === null) {
+        throw new Error("Unlock wallet before preparing private deposit.");
+      }
+
+      const quote = await createDepositQuote(prepareInput);
+      const preparedDeposit = await prepareDepositWithExecutor(
+        getDepositExecutor(),
+        {
+          programAddress,
+          ownerAddress: walletAddress,
+          quote,
+          unlockSignature,
+        },
+      );
+
+      validatePreparedDeposit(preparedDeposit, {
+        programAddress,
+        ownerAddress: walletAddress,
+        quote,
+      });
+
+      return preparedDeposit;
+    },
+    simulateDeposit(preparedDeposit) {
+      return simulateDepositWithExecutor(getDepositExecutor(), preparedDeposit);
+    },
+    async sendDeposit(preparedDeposit) {
+      const simulation = await simulateDepositWithExecutor(
+        getDepositExecutor(),
+        preparedDeposit,
+      );
+
+      if (!simulation.ok) {
+        throw new Error(
+          `Private deposit simulation failed: ${simulation.errorMessage}`,
+        );
+      }
+
+      return sendDepositWithExecutor(getDepositExecutor(), preparedDeposit);
     },
     quoteTransfer(quoteInput) {
       return createQuote(quoteInput);
@@ -333,7 +434,7 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
   });
   const transactionExecutor = createTransactionExecutor({
     rpc: input.rpc,
-    ...(input.transaction ?? {}),
+    ...createPrivateClientTransactionOptions(input),
   });
   const transferInput = {
     rpc: input.rpc,
@@ -347,6 +448,7 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
     ownerAddress: walletAddress,
     feeRecipient: input.feeRecipient,
     feePayer: input.feePayer,
+    computeUnitLimit: input.computeUnitLimit,
     explorerBaseUrl: input.explorerBaseUrl,
     buildTransactInstruction: input.buildTransactInstruction,
     crypto: input.crypto,
@@ -366,6 +468,36 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
           ...transferInput,
           proofRunner: input.proofRunner,
         });
+  const depositInput = {
+    rpc: input.rpc,
+    signer: input.signer,
+    transactionExecutor,
+    indexer,
+    hasher: input.hasher,
+    programAddress,
+    ownerAddress: walletAddress,
+    feeRecipient: input.feeRecipient,
+    feePayer: input.feePayer,
+    computeUnitLimit: input.computeUnitLimit,
+    explorerBaseUrl: input.explorerBaseUrl,
+    buildTransactInstruction: input.buildTransactInstruction,
+    crypto: input.crypto,
+    randomBytes: input.randomBytes,
+    now: input.now,
+  };
+  const deposit =
+    input.proofRunner === undefined
+      ? createPrivateDepositExecutor({
+          ...depositInput,
+          wasm: input.wasm,
+          zkey: input.zkey,
+          singleThread: input.singleThread,
+          groth16: input.groth16,
+        })
+      : createPrivateDepositExecutor({
+          ...depositInput,
+          proofRunner: input.proofRunner,
+        });
   const client = createClient({
     wallet: {
       address: walletAddress,
@@ -379,6 +511,7 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
     notes,
     pool,
     transfer,
+    deposit,
     programAddress,
     indexer,
   });
@@ -389,6 +522,28 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
       capturedUnlockSignature = null;
       client.clearNotes();
     },
+  };
+}
+
+function createPrivateClientTransactionOptions(
+  input: CreatePrivateClientInput,
+): PrivateClientTransactionOptions {
+  const transactionOptions = input.transaction ?? {};
+
+  if (
+    transactionOptions.compressTransactionMessage !== undefined ||
+    input.lookupTableAddresses === undefined ||
+    input.lookupTableAddresses.length === 0
+  ) {
+    return transactionOptions;
+  }
+
+  return {
+    ...transactionOptions,
+    compressTransactionMessage: createAddressLookupTableCompressor({
+      rpc: input.rpc as unknown as Rpc<GetMultipleAccountsApi>,
+      lookupTableAddresses: input.lookupTableAddresses,
+    }),
   };
 }
 

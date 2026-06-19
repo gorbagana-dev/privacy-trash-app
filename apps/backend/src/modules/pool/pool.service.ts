@@ -57,7 +57,10 @@ export type PoolStatusDto = {
 export type OutputRangeDto = {
   total: number;
   hasMore: boolean;
-  encryptedOutputs: string[];
+  outputs: {
+    outputIndex: number;
+    encryptedOutput: string;
+  }[];
 };
 
 export type OutputCheckDto = {
@@ -175,7 +178,10 @@ export function createPoolService(input: CreatePoolServiceInput): PoolService {
       return {
         total,
         hasMore: request.end < BigInt(total),
-        encryptedOutputs: rows.map((row) => row.encryptedOutput),
+        outputs: rows.map((row) => ({
+          outputIndex: outputIndexToNumber(row.outputIndex),
+          encryptedOutput: row.encryptedOutput,
+        })),
       };
     },
 

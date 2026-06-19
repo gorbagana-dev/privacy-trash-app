@@ -5,13 +5,19 @@ export {
   parseAmount,
 } from "@/amount";
 export {
+  createDepositChainExecutor,
   createChainExecutor,
+  CHAIN_DEPOSIT_PAYLOAD_KIND,
   CHAIN_TRANSFER_PAYLOAD_KIND,
+  DEFAULT_TRANSACT_COMPUTE_UNIT_LIMIT,
   type BuildTransactInstruction,
   type BuildTransactInstructionInput,
+  type ChainDepositPayload,
   type ChainRpc,
   type ChainTransactionMessage,
+  type CreateDepositChainExecutorInput,
   type CreateChainExecutorInput,
+  getDepositChainPayload,
   type TransactionExecutionInput,
   type TransactionExecutor,
 } from "@/chain";
@@ -22,7 +28,9 @@ export {
   type CreateClientInput,
   type CreatePrivateClientInput,
   type ClientSyncNotesInput,
+  type QuotedDeposit,
   type QuotedTransfer,
+  type QuoteDepositInput,
   type QuoteTransferInput,
   type PrivateClientProofConfig,
   type PrivateClientTransactionOptions,
@@ -36,6 +44,10 @@ export {
   type CircuitOutputKind,
   type CircuitPublicInputs,
   type CreateCircuitProverInput,
+  createDepositCircuitProver,
+  type CreateDepositCircuitProverInput,
+  type DepositCircuitInput,
+  type DepositCircuitProver,
   type NullifierAccountResolver,
   type NullifierAccountResolverInput,
   type OutputBlinding,
@@ -62,9 +74,33 @@ export {
   type NoteKeyDeriver,
 } from "@/encryption";
 export {
+  DEPOSIT_EXECUTION_VERSION,
+  depositQuoteSchema,
+  depositReceiptSchema,
+  depositRequestSchema,
+  depositSimulationSchema,
+  preparedDepositSchema,
+  prepareDeposit,
+  prepareDepositInputSchema,
+  quoteDeposit,
+  sendDeposit,
+  simulateDeposit,
+  validatePreparedDeposit,
+  type DepositExecutor,
+  type DepositProofProvider,
+  type DepositQuote,
+  type DepositQuoteInput,
+  type DepositReceipt,
+  type DepositRequest,
+  type DepositSimulation,
+  type PreparedDeposit,
+  type PrepareDepositInput,
+} from "@/deposit";
+export {
   FIELD_SIZE,
   bytesToHex,
   decimalToFieldHex,
+  fieldBytesToDecimal,
   fieldDecimalToBytes,
   fieldElementDecimalSchema,
   fieldHexToBytes,
@@ -79,6 +115,7 @@ export {
   type IndexerStatus,
   type MerkleProof,
   type MerkleProofInput,
+  type MerkleState,
   type NullifierStatus,
   type NullifierStatusInput,
   type OutputCheck,
@@ -88,6 +125,10 @@ export {
   type OutputRange,
   type OutputRangeInput,
 } from "@/indexer";
+export {
+  createAddressLookupTableCompressor,
+  type CreateAddressLookupTableCompressorInput,
+} from "@/lookup-tables";
 export {
   clearNotes,
   createNoteBackup,
@@ -142,6 +183,7 @@ export {
   createOutputEncryptor,
   createRandomFieldElement,
   cryptoRandomBytes,
+  encodeOutputPayload,
   encryptedOutputBytesToHex,
   encryptOutputPayload,
   serializeOutputPayload,
@@ -160,6 +202,10 @@ export {
   type CreatePrivateTransferExecutorInput,
 } from "@/private-transfer";
 export {
+  createPrivateDepositExecutor,
+  type CreatePrivateDepositExecutorInput,
+} from "@/private-deposit";
+export {
   createProofRunner,
   createSnarkInput,
   formatProof,
@@ -177,11 +223,14 @@ export {
 } from "@/program";
 export {
   createProverProofProvider,
+  createDepositProofProvider,
   type CircuitAmounts,
   type CircuitInput,
   type CircuitInputNote,
+  type CreateDepositProofProviderInput,
   type CircuitProver,
   type CreateProverProofProviderInput,
+  type DepositProverIndexer,
   type MerkleProofEntry,
   type NoteSelectionInput,
   type NoteSelector,
@@ -207,8 +256,12 @@ export {
 } from "@/sync";
 export {
   createUtxoDecryptor,
+  deriveUtxoPrivateKey,
+  deriveUtxoPublicKey,
+  rederiveUtxoWitness,
   NATIVE_TOKEN_SENTINEL,
   UTXO_ENCRYPTION_VERSION_V2,
+  UTXO_ENCRYPTION_VERSION_V3,
   utxoWitnessSchema,
   type CreateUtxoDecryptorInput,
   type PoseidonHasher,
@@ -257,6 +310,7 @@ export {
   type SignTransactionMessage,
   type Sleep,
   type TransactionExecutorCommitment,
+  type TransactionMessageCompressor,
   type TransactionRpc,
 } from "@/transaction-executor";
 export {

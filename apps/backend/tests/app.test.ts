@@ -80,6 +80,11 @@ function createTestDependencies(
           nextIndex: 4,
           proofs: [],
         }),
+        getState: async () => ({
+          treeHeight: 26,
+          root: "123",
+          nextIndex: 4,
+        }),
       } satisfies MerkleService),
     poolService:
       input.poolService ??
@@ -97,7 +102,7 @@ function createTestDependencies(
         getOutputRange: async () => ({
           total: 0,
           hasMore: false,
-          encryptedOutputs: [],
+          outputs: [],
         }),
         checkEncryptedOutput: async () => ({
           exists: false,
@@ -331,7 +336,16 @@ describe("createApp", () => {
       getOutputRange: vi.fn(async () => ({
         total: 4,
         hasMore: true,
-        encryptedOutputs: ["ZW5jcnlwdGVkLTE=", "ZW5jcnlwdGVkLTI="],
+        outputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "ZW5jcnlwdGVkLTE=",
+          },
+          {
+            outputIndex: 1,
+            encryptedOutput: "ZW5jcnlwdGVkLTI=",
+          },
+        ],
       })),
       checkEncryptedOutput: vi.fn(),
       getOutputIndicesByCommitments: vi.fn(),
@@ -352,7 +366,16 @@ describe("createApp", () => {
       data: {
         total: 4,
         hasMore: true,
-        encryptedOutputs: ["ZW5jcnlwdGVkLTE=", "ZW5jcnlwdGVkLTI="],
+        outputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "ZW5jcnlwdGVkLTE=",
+          },
+          {
+            outputIndex: 1,
+            encryptedOutput: "ZW5jcnlwdGVkLTI=",
+          },
+        ],
       },
     });
   });
@@ -453,6 +476,7 @@ describe("createApp", () => {
           },
         ],
       })),
+      getState: vi.fn(),
     };
     const app = createApp(createTestDependencies({ merkleService }));
     const response = await app.request(`/v1/merkle/proof?commitments=${commitment}`);
@@ -471,6 +495,32 @@ describe("createApp", () => {
             outputIndex: "2",
           },
         ],
+      },
+    });
+  });
+
+  it("returns current Merkle state for deposit preparation", async () => {
+    const merkleService: MerkleService = {
+      getPath: vi.fn(),
+      getProofByCommitments: vi.fn(),
+      getState: vi.fn(async () => ({
+        treeHeight: 26,
+        root: "123",
+        nextIndex: 4,
+      })),
+    };
+    const app = createApp(createTestDependencies({ merkleService }));
+    const response = await app.request("/v1/merkle/state");
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(merkleService.getState).toHaveBeenCalledOnce();
+    expect(body).toEqual({
+      success: true,
+      data: {
+        treeHeight: 26,
+        root: "123",
+        nextIndex: 4,
       },
     });
   });
@@ -521,6 +571,7 @@ describe("createApp", () => {
         pathIndices: Array.from({ length: 26 }, () => 0),
       })),
       getProofByCommitments: vi.fn(),
+      getState: vi.fn(),
     };
     const app = createApp(createTestDependencies({ merkleService }));
     const response = await app.request("/v1/pool/merkle-path/2");
@@ -541,6 +592,7 @@ describe("createApp", () => {
     const merkleService: MerkleService = {
       getPath: vi.fn(async () => null),
       getProofByCommitments: vi.fn(),
+      getState: vi.fn(),
     };
     const app = createApp(createTestDependencies({ merkleService }));
     const response = await app.request("/v1/pool/merkle-path/99");

@@ -1,22 +1,32 @@
 # Privacy Trash SDK
 
-Contract-only TypeScript SDK for the deployed Privacy Trash program.
+TypeScript SDK for the deployed Privacy Trash program.
 
-The public API is native GOR-only. Generated Codama code stays internal; apps should import from the package root.
+The SDK exposes the contract-facing API. Apps should import from the package root.
 
-Current surface:
+## Install
 
-- `programAddress`
-- `findPoolAddresses()`
-- `findPoolAddressValues()`
-- `fetchPoolState()`
-- `buildInitializeInstruction()`
-- `buildTransactInstruction()`
-- `identifyInstruction()`
-- `parseInstruction()`
-- `contractErrorCodes`
-- `getContractError()`
-- `parseContractError()`
+This package is part of the workspace:
+
+```sh
+npm install
+```
+
+## Public API
+
+| Export | Description |
+| --- | --- |
+| `programAddress` | Deployed program address |
+| `findPoolAddresses` | Derive pool account addresses |
+| `findPoolAddressValues` | Derive pool account address strings |
+| `fetchPoolState` | Fetch pool state |
+| `buildInitializeInstruction` | Build the initialize instruction |
+| `buildTransactInstruction` | Build the transact instruction |
+| `identifyInstruction` | Identify a program instruction |
+| `parseInstruction` | Parse a program instruction |
+| `contractErrorCodes` | Known program error codes |
+| `getContractError` | Get a program error by code |
+| `parseContractError` | Parse a program error from a thrown value |
 
 ## Examples
 
@@ -41,14 +51,4 @@ const instruction = await buildTransactInstruction({
   encryptedOutput1,
   encryptedOutput2,
 });
-```
-
-```ts
-import { parseContractError } from "@gorbagana/privacy-trash-sdk";
-
-const parsed = parseContractError(error, transactionMessage);
-
-if (parsed) {
-  console.error(`${parsed.name}: ${parsed.message}`);
-}
 ```

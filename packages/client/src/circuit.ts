@@ -2,11 +2,17 @@ import type { Address, ReadonlyUint8Array } from "@solana/kit";
 import { z } from "zod";
 
 import {
+  createSignatureNoteKeyDeriver,
+  deriveNoteKey,
+  type NoteKeyDeriver,
+} from "@/encryption";
+import {
   decimalToFieldHex,
   fieldDecimalToBytes,
   fieldElementDecimalSchema,
   fieldHexToBytes,
 } from "@/field";
+import { prepareDepositInputSchema } from "@/deposit";
 import {
   createRandomFieldElement,
   cryptoRandomBytes,
@@ -17,15 +23,23 @@ import type {
   CircuitInputNote,
   CircuitProver,
 } from "@/prover";
-import { addressSchema, nonEmptyBytesSchema } from "@/schemas";
-import { NATIVE_TOKEN_SENTINEL, type PoseidonHasher } from "@/utxo";
+import {
+  addressSchema,
+  nonEmptyBytesSchema,
+  safeIntegerSchema,
+} from "@/schemas";
+import {
+  NATIVE_TOKEN_SENTINEL,
+  deriveUtxoPublicKey,
+  type PoseidonHasher,
+} from "@/utxo";
 
 const circuitExtDataSchema = z.strictObject({
   extAmount: z.bigint(),
   fee: z.bigint().nonnegative(),
 });
 
-const circuitOutputKindSchema = z.enum(["change", "dummy"]);
+const circuitOutputKindSchema = z.enum(["change", "deposit", "dummy"]);
 
 const circuitOutputSchema = z.strictObject({
   kind: circuitOutputKindSchema,
@@ -57,6 +71,16 @@ const proofRunnerOutputSchema = z.strictObject({
   proofC: fixedBytesSchema(64, "proofC"),
 });
 
+const depositCircuitInputSchema = z.strictObject({
+  deposit: prepareDepositInputSchema,
+  programAddress: addressSchema,
+  ownerAddress: addressSchema,
+  recipient: addressSchema,
+  merkleRoot: fieldElementDecimalSchema,
+  treeHeight: safeIntegerSchema,
+  nextIndex: safeIntegerSchema,
+});
+
 export type CircuitExtData = z.infer<typeof circuitExtDataSchema>;
 export type CircuitOutputKind = z.infer<typeof circuitOutputKindSchema>;
 export type CircuitOutput = z.infer<typeof circuitOutputSchema>;
@@ -79,7 +103,7 @@ export type CircuitInputSlot = {
 };
 
 export type ProofRunnerInput = {
-  transfer: CircuitInput["transfer"];
+  operation: unknown;
   programAddress: string;
   ownerAddress: string;
   recipient: string;
@@ -99,7 +123,7 @@ export type ProofRunner = {
 export type OutputBlindingInput = {
   kind: CircuitOutputKind;
   outputIndex: number;
-  transfer: CircuitInput["transfer"];
+  operation: unknown;
 };
 
 export type OutputBlinding = {
@@ -155,6 +179,16 @@ export type CreateCircuitProverInput = {
   randomBytes?: RandomBytes | undefined;
 };
 
+export type DepositCircuitInput = z.infer<typeof depositCircuitInputSchema>;
+
+export type DepositCircuitProver = {
+  proveDeposit(input: DepositCircuitInput): Promise<unknown>;
+};
+
+export type CreateDepositCircuitProverInput = CreateCircuitProverInput & {
+  noteKeyDeriver?: NoteKeyDeriver | undefined;
+};
+
 export function createCircuitProver(
   input: CreateCircuitProverInput,
 ): CircuitProver {
@@ -177,7 +211,11 @@ export function createCircuitProver(
         outputBlinding: input.outputBlinding,
       });
       const encryptedOutputs = await encryptOutputs({
-        circuitInput,
+        scope: {
+          programAddress: circuitInput.programAddress,
+          ownerAddress: circuitInput.ownerAddress,
+          unlockSignature: circuitInput.transfer.unlockSignature,
+        },
         outputs,
         outputEncryptor: input.outputEncryptor,
       });
@@ -187,7 +225,7 @@ export function createCircuitProver(
         randomBytes,
       });
       const extData = circuitExtDataSchema.parse({
-        extAmount: -circuitInput.amounts.grossWithdrawalLamports,
+        extAmount: -circuitInput.amounts.recipientLamports,
         fee: circuitInput.amounts.withdrawalFeeLamports,
       });
       const outputCommitments = outputs.map((output) =>
@@ -230,7 +268,143 @@ export function createCircuitProver(
       });
       const proof = proofRunnerOutputSchema.parse(
         await input.proofRunner.prove({
-          transfer: circuitInput.transfer,
+          operation: circuitInput.transfer,
+          programAddress: circuitInput.programAddress,
+          ownerAddress: circuitInput.ownerAddress,
+          recipient: circuitInput.recipient,
+          feeRecipient,
+          merkleRoot: circuitInput.merkleRoot,
+          treeHeight: circuitInput.treeHeight,
+          inputNotes,
+          outputs,
+          extData,
+          publicInputs,
+        }),
+      );
+
+      return proofMaterialSchema.parse({
+        nullifiers,
+        proof: {
+          ...proof,
+          root: publicInputs.root,
+          publicAmount: publicInputs.publicAmount,
+          extDataHash: publicInputs.extDataHash,
+          inputNullifiers: publicInputs.inputNullifiers,
+          outputCommitments: publicInputs.outputCommitments,
+        },
+        extData,
+        encryptedOutput1: encryptedOutputs[0],
+        encryptedOutput2: encryptedOutputs[1],
+      }) satisfies ProofMaterial;
+    },
+  };
+}
+
+export function createDepositCircuitProver(
+  input: CreateDepositCircuitProverInput,
+): DepositCircuitProver {
+  const feeRecipient = addressSchema.parse(input.feeRecipient);
+  const randomBytes = input.randomBytes ?? cryptoRandomBytes;
+  const noteKeyDeriver = input.noteKeyDeriver ?? createSignatureNoteKeyDeriver();
+
+  return {
+    async proveDeposit(depositInput) {
+      const circuitInput = depositCircuitInputSchema.parse(depositInput);
+
+      if (circuitInput.deposit.programAddress !== circuitInput.programAddress) {
+        throw new Error("Deposit program address does not match circuit scope.");
+      }
+
+      if (circuitInput.deposit.ownerAddress !== circuitInput.ownerAddress) {
+        throw new Error("Deposit owner address does not match circuit scope.");
+      }
+
+      if (circuitInput.recipient !== circuitInput.ownerAddress) {
+        throw new Error("Deposit recipient must match owner address.");
+      }
+
+      const noteKey = await deriveNoteKey(noteKeyDeriver, {
+        programAddress: circuitInput.programAddress,
+        ownerAddress: circuitInput.ownerAddress,
+        unlockSignature: circuitInput.deposit.unlockSignature,
+      });
+      const publicKey = deriveUtxoPublicKey({
+        hasher: input.hasher,
+        noteKey,
+      });
+      const outputs = await createDepositOutputs({
+        deposit: circuitInput.deposit,
+        publicKey,
+        nextIndex: circuitInput.nextIndex,
+        hasher: input.hasher,
+        outputBlinding: input.outputBlinding,
+      });
+      const encryptedOutputs = await encryptOutputs({
+        scope: {
+          programAddress: circuitInput.programAddress,
+          ownerAddress: circuitInput.ownerAddress,
+          unlockSignature: circuitInput.deposit.unlockSignature,
+        },
+        outputs,
+        outputEncryptor: input.outputEncryptor,
+      });
+      const inputNotes = [
+        createDummyInputSlot({
+          treeHeight: circuitInput.treeHeight,
+          hasher: input.hasher,
+          randomBytes,
+        }),
+        createDummyInputSlot({
+          treeHeight: circuitInput.treeHeight,
+          hasher: input.hasher,
+          randomBytes,
+        }),
+      ] as [CircuitInputSlot, CircuitInputSlot];
+      const extData = circuitExtDataSchema.parse({
+        extAmount: circuitInput.deposit.quote.depositLamports,
+        fee: circuitInput.deposit.quote.depositFeeLamports,
+      });
+      const outputCommitments = outputs.map((output) =>
+        decimalToFieldHex(output.commitment),
+      ) as [string, string];
+      const inputNullifiers = inputNotes.map((note) => note.nullifierHex) as [
+        string,
+        string,
+      ];
+      const nullifiers = parseNullifierAccounts(
+        await input.nullifierAccounts.resolveNullifierAccounts({
+          programAddress: circuitInput.programAddress,
+          ownerAddress: circuitInput.ownerAddress,
+          inputNullifiers,
+          outputCommitments,
+        }),
+      );
+      const publicInputs = circuitPublicInputsSchema.parse({
+        root: fieldDecimalToBytes(circuitInput.merkleRoot),
+        publicAmount: parseFixedBytes(
+          await input.publicInputEncoder.encodePublicAmount(extData),
+          32,
+          "publicAmount",
+        ),
+        extDataHash: parseFixedBytes(
+          await input.publicInputEncoder.hashExtData({
+            extData,
+            recipient: circuitInput.recipient,
+            feeRecipient,
+            encryptedOutputs,
+            outputCommitments,
+          }),
+          32,
+          "extDataHash",
+        ),
+        inputNullifiers: inputNullifiers.map(fieldHexToBytes),
+        outputCommitments: outputs.map((output) =>
+          fieldDecimalToBytes(output.commitment),
+        ),
+      });
+      const proof = proofRunnerOutputSchema.parse(
+        await input.proofRunner.prove({
+          operation: circuitInput.deposit,
           programAddress: circuitInput.programAddress,
           ownerAddress: circuitInput.ownerAddress,
           recipient: circuitInput.recipient,
@@ -365,7 +539,7 @@ async function createOutputs(input: {
         await input.outputBlinding.createBlinding({
           kind: outputInput.kind,
           outputIndex: outputInput.index,
-          transfer: input.circuitInput.transfer,
+          operation: input.circuitInput.transfer,
         }),
       );
       const commitment = fieldElementDecimalSchema.parse(
@@ -390,8 +564,62 @@ async function createOutputs(input: {
   return [outputs[0] as CircuitOutput, outputs[1] as CircuitOutput];
 }
 
+async function createDepositOutputs(input: {
+  deposit: z.infer<typeof prepareDepositInputSchema>;
+  publicKey: string;
+  nextIndex: number;
+  hasher: PoseidonHasher;
+  outputBlinding: OutputBlinding;
+}): Promise<[CircuitOutput, CircuitOutput]> {
+  const outputInputs = [
+    {
+      kind: "deposit" as const,
+      amountLamports: input.deposit.quote.privateOutputLamports,
+      index: input.nextIndex,
+    },
+    {
+      kind: "dummy" as const,
+      amountLamports: 0n,
+      index: input.nextIndex + 1,
+    },
+  ];
+  const outputs = await Promise.all(
+    outputInputs.map(async (outputInput) => {
+      const blinding = fieldElementDecimalSchema.parse(
+        await input.outputBlinding.createBlinding({
+          kind: outputInput.kind,
+          outputIndex: outputInput.index,
+          operation: input.deposit,
+        }),
+      );
+      const commitment = fieldElementDecimalSchema.parse(
+        input.hasher.poseidonHashString([
+          outputInput.amountLamports.toString(),
+          input.publicKey,
+          blinding,
+          NATIVE_TOKEN_SENTINEL,
+        ]),
+      );
+
+      return circuitOutputSchema.parse({
+        ...outputInput,
+        blinding,
+        publicKey: input.publicKey,
+        mintAddress: NATIVE_TOKEN_SENTINEL,
+        commitment,
+      });
+    }),
+  );
+
+  return [outputs[0] as CircuitOutput, outputs[1] as CircuitOutput];
+}
+
 async function encryptOutputs(input: {
-  circuitInput: CircuitInput;
+  scope: {
+    programAddress: string;
+    ownerAddress: string;
+    unlockSignature: Uint8Array;
+  };
   outputs: readonly [CircuitOutput, CircuitOutput];
   outputEncryptor: OutputEncryptor;
 }): Promise<[Uint8Array, Uint8Array]> {
@@ -399,9 +627,9 @@ async function encryptOutputs(input: {
     input.outputs.map((output) =>
       input.outputEncryptor.encryptOutput({
         ...output,
-        programAddress: input.circuitInput.programAddress,
-        ownerAddress: input.circuitInput.ownerAddress,
-        unlockSignature: input.circuitInput.transfer.unlockSignature,
+        programAddress: input.scope.programAddress,
+        ownerAddress: input.scope.ownerAddress,
+        unlockSignature: input.scope.unlockSignature,
       }),
     ),
   );
@@ -444,7 +672,11 @@ function createCircuitInputSlots(input: {
   return [
     createInputSlot(firstNote, input.circuitInput.treeHeight),
     input.circuitInput.inputNotes[1] === undefined
-      ? createDummyInputSlot(input)
+      ? createDummyInputSlot({
+          treeHeight: input.circuitInput.treeHeight,
+          hasher: input.hasher,
+          randomBytes: input.randomBytes,
+        })
       : createInputSlot(
           input.circuitInput.inputNotes[1],
           input.circuitInput.treeHeight,
@@ -478,7 +710,7 @@ function createInputSlot(
 }
 
 function createDummyInputSlot(input: {
-  circuitInput: CircuitInput;
+  treeHeight: number;
   hasher: PoseidonHasher;
   randomBytes: RandomBytes;
 }): CircuitInputSlot {
@@ -509,6 +741,6 @@ function createDummyInputSlot(input: {
     nullifier,
     nullifierHex: decimalToFieldHex(nullifier),
     pathIndex: 0,
-    pathElements: Array.from({ length: input.circuitInput.treeHeight }, () => "0"),
+    pathElements: Array.from({ length: input.treeHeight }, () => "0"),
   };
 }

@@ -13,7 +13,6 @@ import {
 import { z } from "zod";
 
 import {
-  getChainPayload,
   type ChainTransactionMessage,
   type TransactionExecutor,
 } from "@/chain";
@@ -26,6 +25,7 @@ import {
 const defaultCommitment = "confirmed";
 const defaultConfirmationTimeoutMs = 60_000;
 const defaultConfirmationPollIntervalMs = 1_000;
+const maxWireTransactionBytes = 1_232;
 
 const commitmentSchema = z.enum(["processed", "confirmed", "finalized"]);
 const positiveMsSchema = z.number().int().positive().max(120_000);
@@ -93,6 +93,10 @@ export type SignTransactionMessage = (
   transactionMessage: ChainTransactionMessage,
 ) => Promise<RuntimeTransaction>;
 
+export type TransactionMessageCompressor = (
+  transactionMessage: ChainTransactionMessage,
+) => ChainTransactionMessage | Promise<ChainTransactionMessage>;
+
 export type EncodeTransaction = (
   transaction: Transaction,
 ) => Base64EncodedWireTransaction;
@@ -112,6 +116,7 @@ export type CreateTransactionExecutorInput = {
   searchTransactionHistory?: boolean | undefined;
   compileTransactionMessage?: CompileTransactionMessage | undefined;
   signTransactionMessage?: SignTransactionMessage | undefined;
+  compressTransactionMessage?: TransactionMessageCompressor | undefined;
   encodeTransaction?: EncodeTransaction | undefined;
   getTransactionSignature?: GetTransactionSignature | undefined;
   sleep?: Sleep | undefined;
@@ -154,6 +159,7 @@ export function createTransactionExecutor(
   const compileMessage =
     input.compileTransactionMessage ?? defaultCompileTransactionMessage;
   const signMessage = input.signTransactionMessage ?? defaultSignTransactionMessage;
+  const compressMessage = input.compressTransactionMessage ?? identityCompressor;
   const encodeTransaction =
     input.encodeTransaction ?? getBase64EncodedWireTransaction;
   const getSignature = input.getTransactionSignature ?? getSignatureFromTransaction;
@@ -161,9 +167,14 @@ export function createTransactionExecutor(
 
   return {
     async simulateTransaction(executionInput) {
-      const payload = getChainPayload(executionInput.preparedTransfer);
-      const transaction = compileMessage(payload.transactionMessage);
+      const transactionMessage = await compressMessage(
+        executionInput.transactionMessage,
+      );
+      const transaction = compileMessage(transactionMessage);
       const encodedTransaction = encodeTransaction(transaction);
+
+      assertEncodedTransactionWithinSize(encodedTransaction);
+
       const response = await input.rpc
         .simulateTransaction(encodedTransaction, {
           commitment,
@@ -176,9 +187,14 @@ export function createTransactionExecutor(
       return normalizeSimulation(response);
     },
     async sendTransaction(executionInput) {
-      const payload = getChainPayload(executionInput.preparedTransfer);
-      const transaction = await signMessage(payload.transactionMessage);
+      const transactionMessage = await compressMessage(
+        executionInput.transactionMessage,
+      );
+      const transaction = await signMessage(transactionMessage);
       const encodedTransaction = encodeTransaction(transaction);
+
+      assertEncodedTransactionWithinSize(encodedTransaction);
+
       const localSignature = transactionSignatureSchema.parse(
         getSignature(transaction),
       ) as Signature;
@@ -208,8 +224,7 @@ export function createTransactionExecutor(
         rpc: input.rpc,
         signature: sentSignature,
         commitment,
-        lastValidBlockHeight:
-          payload.transactionMessage.lifetimeConstraint.lastValidBlockHeight,
+        lastValidBlockHeight: transactionMessage.lifetimeConstraint.lastValidBlockHeight,
         timeoutMs: confirmationTimeoutMs,
         pollIntervalMs: confirmationPollIntervalMs,
         searchTransactionHistory: input.searchTransactionHistory,
@@ -230,12 +245,43 @@ function defaultCompileTransactionMessage(
   return compileTransaction(transactionMessage);
 }
 
+function identityCompressor(
+  transactionMessage: ChainTransactionMessage,
+): ChainTransactionMessage {
+  return transactionMessage;
+}
+
 async function defaultSignTransactionMessage(
   transactionMessage: ChainTransactionMessage,
 ): Promise<RuntimeTransaction> {
   return await signTransactionMessageWithSigners(
     transactionMessage as ChainTransactionMessage & TransactionMessageWithSigners,
   );
+}
+
+function assertEncodedTransactionWithinSize(
+  transaction: Base64EncodedWireTransaction,
+): void {
+  const encodedBytes = String(transaction).length;
+  const rawBytes = getBase64DecodedByteLength(String(transaction));
+
+  if (rawBytes <= maxWireTransactionBytes) return;
+
+  throw new TransactionExecutorError({
+    code: "transaction_too_large",
+    message: "Transaction is too large for Gorbagana's packet size limit.",
+    details: {
+      rawBytes,
+      encodedBytes,
+      maxBytes: maxWireTransactionBytes,
+    },
+  });
+}
+
+function getBase64DecodedByteLength(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+
+  return Math.floor((value.length * 3) / 4) - padding;
 }
 
 function normalizeSimulation(input: unknown): TransferSimulation {
@@ -318,13 +364,14 @@ async function getSignatureStatus(input: {
   signature: Signature;
   searchTransactionHistory: boolean | undefined;
 }) {
-  const response = await input.rpc
-    .getSignatureStatuses([input.signature], {
-      ...(input.searchTransactionHistory === undefined
-        ? {}
-        : { searchTransactionHistory: input.searchTransactionHistory }),
-    })
-    .send();
+  const response =
+    input.searchTransactionHistory === undefined
+      ? await input.rpc.getSignatureStatuses([input.signature]).send()
+      : await input.rpc
+          .getSignatureStatuses([input.signature], {
+            searchTransactionHistory: input.searchTransactionHistory,
+          })
+          .send();
   const statuses = signatureStatusesSchema.parse(getRpcValue(response));
 
   return statuses[0] ?? null;

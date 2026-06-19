@@ -7,9 +7,24 @@ export {
   type Indexer,
   type IndexerFetch,
   type IndexerStatus,
+  type MerkleState,
   type NullifierStatus,
   type OutputRange,
 } from "@/indexer";
+export {
+  depositQuoteSchema,
+  depositRequestSchema,
+  quoteDeposit,
+  type DepositQuote,
+  type DepositQuoteInput,
+  type DepositRequest,
+} from "@/deposit";
+export {
+  createUnlockMessage,
+  encodeUnlockMessage,
+  UNLOCK_MESSAGE_PURPOSE,
+  UNLOCK_MESSAGE_VERSION,
+} from "@/wallet";
 export {
   createSignatureNoteKeyDeriver,
   deriveNoteKey,
@@ -107,8 +122,10 @@ const privateNoteScanSchema = z.strictObject({
   totalOutputCount: safeIntegerSchema,
   unspentNoteCount: safeIntegerSchema,
 });
+const noteScanSyncModeSchema = z.enum(["incremental", "full"]);
 
 export type BrowserNoteIdentity = z.infer<typeof noteIdentitySchema>;
+export type NoteScanSyncMode = z.infer<typeof noteScanSyncModeSchema>;
 export type PrivateNoteScan = z.infer<typeof privateNoteScanSchema>;
 export type PrivateNoteStorageFactory = () => KeyValueStorage;
 export type PoseidonHasherFactory = () => Promise<PoseidonHasher>;
@@ -129,6 +146,7 @@ export type ScanPrivateNotesInput = {
   storage?: KeyValueStorage | undefined;
   storageFactory?: PrivateNoteStorageFactory | undefined;
   syncBatchSize?: number | undefined;
+  syncMode?: NoteScanSyncMode | undefined;
 };
 
 export class PrivateNoteScanError extends Error {
@@ -154,6 +172,9 @@ export async function scanPrivateNotes(
 ): Promise<PrivateNoteScan> {
   const identity = noteIdentitySchema.parse(input.identity);
   const programAddress = input.programAddress ?? identity.programAddress;
+  const syncMode = noteScanSyncModeSchema
+    .default("incremental")
+    .parse(input.syncMode);
 
   if (identity.programAddress !== programAddress) {
     throw new PrivateNoteScanError(
@@ -166,8 +187,14 @@ export async function scanPrivateNotes(
     input.storage === undefined
       ? createNoteStore((input.storageFactory ?? createBrowserNoteStorage)())
       : createNoteStore(input.storage);
+  const syncNotesStore =
+    syncMode === "full" ? createNoteStore(createMemoryStorage()) : notes;
   const indexer = getNoteIndexer(input);
   const unlockSignature = bytesFromBase64(identity.signatureBase64);
+  const noteScope = {
+    programAddress,
+    ownerAddress: identity.walletAddress,
+  };
 
   try {
     const [hasher, syncResult] = await Promise.all([
@@ -176,34 +203,34 @@ export async function scanPrivateNotes(
         hasherWasm: input.hasherWasm,
       }),
       syncAllNotes({
-        notes,
+        notes: syncNotesStore,
         indexer,
-        programAddress,
-        ownerAddress: identity.walletAddress,
+        ...noteScope,
         batchSize: input.syncBatchSize ?? DEFAULT_SYNC_BATCH_SIZE,
       }),
     ]);
+    if (syncMode === "full") {
+      notes.importNotes({
+        ...noteScope,
+        backup: syncResult.backup,
+        merge: false,
+      });
+    }
+
     const source = createOwnedNoteSource({
-      notes,
+      notes: syncNotesStore,
       keyDeriver: createSignatureNoteKeyDeriver(),
       decryptor: createUtxoDecryptor({ hasher }),
-      programAddress,
-      ownerAddress: identity.walletAddress,
+      ...noteScope,
       unlockSignature,
     });
-    const ownedNotes = await source.listOwnedNotes({
-      programAddress,
-      ownerAddress: identity.walletAddress,
-    });
+    const ownedNotes = await source.listOwnedNotes(noteScope);
     const unspentNotes = await createOwnedNoteStore({
       source: {
         listOwnedNotes: async () => ownedNotes,
       },
       indexer,
-    }).listOwnedNotes({
-      programAddress,
-      ownerAddress: identity.walletAddress,
-    });
+    }).listOwnedNotes(noteScope);
     const ownedNoteList = z.array(z.unknown()).parse(ownedNotes);
     const unspentNoteList = z.array(z.unknown()).parse(unspentNotes);
     const balance = getOwnedNoteBalance(unspentNoteList);

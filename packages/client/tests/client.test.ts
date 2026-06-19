@@ -9,7 +9,9 @@ import {
 } from "@solana/kit";
 
 import {
+  CHAIN_DEPOSIT_PAYLOAD_KIND,
   CHAIN_TRANSFER_PAYLOAD_KIND,
+  DEPOSIT_EXECUTION_VERSION,
   NATIVE_TOKEN_SENTINEL,
   UTXO_ENCRYPTION_VERSION_V2,
   TRANSFER_EXECUTION_VERSION,
@@ -22,6 +24,7 @@ import {
   encodeUnlockMessage,
   type BuildTransactInstruction,
   type ChainRpc,
+  type DepositExecutor,
   type KeyValueStorage,
   type IndexerFetch,
   type NoteSyncIndexer,
@@ -29,6 +32,8 @@ import {
   type OwnedNoteStore,
   type PoseidonHasher,
   type PoolReader,
+  type PrepareDepositInput,
+  type PreparedDeposit,
   type PrepareTransferInput,
   type PreparedTransfer,
   type ProofRunner,
@@ -122,6 +127,18 @@ function createPreparedTransfer(input: PrepareTransferInput): PreparedTransfer {
   };
 }
 
+function createPreparedDeposit(input: PrepareDepositInput): PreparedDeposit {
+  return {
+    version: DEPOSIT_EXECUTION_VERSION,
+    programAddress: input.programAddress,
+    ownerAddress: input.ownerAddress,
+    recipient: input.ownerAddress,
+    quote: input.quote,
+    createdAt,
+    payload: { id: "prepared-deposit" },
+  };
+}
+
 function createTransferExecutor(
   overrides: Partial<TransferExecutor> = {},
 ): TransferExecutor {
@@ -135,12 +152,30 @@ function createTransferExecutor(
   };
 }
 
+function createDepositExecutor(
+  overrides: Partial<DepositExecutor> = {},
+): DepositExecutor {
+  return {
+    prepareDeposit: vi.fn(async (input: PrepareDepositInput) =>
+      createPreparedDeposit(input),
+    ),
+    simulateDeposit: vi.fn(async () => ({ ok: true, logs: [] })),
+    sendDeposit: vi.fn(async () => ({ signature, sentAt: createdAt })),
+    ...overrides,
+  };
+}
+
 function createIndexer(): NoteSyncIndexer {
   return {
     getOutputRange: vi.fn(async () => ({
       total: 1,
       hasMore: false,
-      encryptedOutputs: ["AQID"],
+      outputs: [
+        {
+          outputIndex: 0,
+          encryptedOutput: "AQID",
+        },
+      ],
     })),
   };
 }
@@ -193,6 +228,14 @@ function createIndexerFetch(): IndexerFetch {
             pathIndices: Array.from({ length: 26 }, () => 0),
           },
         ],
+      });
+    }
+
+    if (url.pathname === "/v1/merkle/state") {
+      return jsonResponse({
+        treeHeight: 26,
+        root: "123",
+        nextIndex: 8,
       });
     }
 
@@ -304,6 +347,7 @@ function createClientForTest(input: {
   notes?: NoteStore;
   pool?: PoolReader;
   transfer?: TransferExecutor;
+  deposit?: DepositExecutor;
   indexer?: NoteSyncIndexer;
 } = {}) {
   return createClient({
@@ -311,6 +355,7 @@ function createClientForTest(input: {
     notes: input.notes ?? createNoteStore(new TestStorage()),
     pool: input.pool ?? createPool(),
     transfer: input.transfer ?? createTransferExecutor(),
+    deposit: input.deposit ?? createDepositExecutor(),
     programAddress,
     indexer: input.indexer,
   });
@@ -371,12 +416,74 @@ describe("client", () => {
     expect(transfer.prepareTransfer).not.toHaveBeenCalled();
   });
 
+  it("quotes and prepares private deposits through the deposit executor", async () => {
+    const wallet = createWallet();
+    const deposit = createDepositExecutor();
+    const pool = createPool({
+      feeConfig: {
+        depositFeeBps: 25,
+        withdrawalFeeBps: 25,
+        feeErrorMarginBps: 500,
+        withdrawRentFeeLamports: 0n,
+      },
+    });
+    const client = createClientForTest({ wallet, pool, deposit });
+
+    await expect(
+      client.quoteDeposit({
+        lamports: 1_000_000n,
+      }),
+    ).resolves.toEqual({
+      depositLamports: 1_000_000n,
+      privateOutputLamports: 997_500n,
+      depositFeeLamports: 2_500n,
+      depositFeeBps: 25,
+    });
+    expect(wallet.signMessage).not.toHaveBeenCalled();
+    expect(deposit.prepareDeposit).not.toHaveBeenCalled();
+
+    await expect(
+      client.prepareDeposit({
+        lamports: 1_000_000n,
+      }),
+    ).rejects.toThrow("Unlock wallet before preparing private deposit");
+
+    await client.unlock();
+
+    const prepared = await client.prepareDeposit({
+      lamports: 1_000_000n,
+    });
+
+    expect(prepared).toMatchObject({
+      recipient: ownerAddress,
+      quote: {
+        depositLamports: 1_000_000n,
+        privateOutputLamports: 997_500n,
+      },
+    });
+    expect(deposit.prepareDeposit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programAddress,
+        ownerAddress,
+      }),
+    );
+    await expect(client.simulateDeposit(prepared)).resolves.toEqual({
+      ok: true,
+      logs: [],
+    });
+    await expect(client.sendDeposit(prepared)).resolves.toEqual({
+      signature,
+      sentAt: createdAt,
+    });
+  });
+
   it("quotes transfers from decrypted owned-note balance", async () => {
     const ownedNotes: OwnedNoteStore = {
       listOwnedNotes: vi.fn(async () => [
         {
           commitment,
           encryptedOutput: "aa",
+          outputIndex: 0,
           nullifier,
           amountLamports: 2_000_000n,
           witness: {},
@@ -457,8 +564,13 @@ describe("client", () => {
         programAddress,
         ownerAddress,
         exportedAt: "2026-06-18T00:00:00.000Z",
-        encryptedOutputs: [encryptedOutput],
-        fetchOffset: 1,
+        indexedOutputs: [
+          {
+            outputIndex: 7,
+            encryptedOutput,
+          },
+        ],
+        fetchOffset: 8,
         historyIndexes: [0],
       },
     });
@@ -575,8 +687,13 @@ describe("client", () => {
         programAddress,
         ownerAddress,
         exportedAt: createdAt,
-        encryptedOutputs: [encryptedOutput],
-        fetchOffset: 1,
+        indexedOutputs: [
+          {
+            outputIndex: 7,
+            encryptedOutput,
+          },
+        ],
+        fetchOffset: 8,
         historyIndexes: [0],
       },
     });
@@ -631,6 +748,120 @@ describe("client", () => {
       preflightCommitment: "confirmed",
       skipPreflight: false,
     });
+  });
+
+  it("composes the private deposit stack from app inputs", async () => {
+    const rpc = createRpc();
+    const proofRunner = createProofRunner();
+    const buildTransactInstruction = createBuildTransactInstruction();
+    const compileTransactionMessage = vi.fn(() => createRuntimeTransaction());
+    const signTransactionMessage = vi.fn(async () => createRuntimeTransaction());
+    const encodeTransaction = vi.fn(() => encodedTransaction);
+    const getTransactionSignature = vi.fn(() => signature as Signature);
+    const client = createPrivateClient({
+      wallet: createWallet(new Uint8Array([1, 2, 3, 4])),
+      signer: createSigner(),
+      storage: new TestStorage(),
+      rpc,
+      programAddress,
+      feeRecipient,
+      indexerBaseUrl: "https://api.privacytrash.test",
+      explorerBaseUrl: "https://explorer.gorbagana.wtf",
+      hasher: createSequencedHasher([
+        "3001",
+        "3002",
+        "3003",
+        "3004",
+        "3005",
+        "3006",
+        "3007",
+        "3008",
+        "3009",
+        "3010",
+        "3011",
+      ]),
+      fees: {
+        depositFeeBps: 0,
+        withdrawalFeeBps: 0,
+        feeErrorMarginBps: 500,
+        withdrawRentFeeLamports: 0n,
+      },
+      proofRunner,
+      buildTransactInstruction,
+      fetch: createIndexerFetch(),
+      transaction: {
+        compileTransactionMessage,
+        signTransactionMessage,
+        encodeTransaction,
+        getTransactionSignature,
+        confirmationPollIntervalMs: 1,
+      },
+      now: () => new Date(createdAt),
+    });
+
+    await client.unlock();
+
+    const prepared = await client.prepareDeposit({
+      lamports: 1_000_000n,
+    });
+
+    expect(prepared.payload).toMatchObject({
+      kind: CHAIN_DEPOSIT_PAYLOAD_KIND,
+    });
+    expect(prepared).toMatchObject({
+      recipient: ownerAddress,
+      quote: {
+        depositLamports: 1_000_000n,
+        privateOutputLamports: 1_000_000n,
+      },
+    });
+    expect(proofRunner.prove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programAddress,
+        ownerAddress,
+        recipient: ownerAddress,
+        feeRecipient,
+        extData: {
+          extAmount: 1_000_000n,
+          fee: 0n,
+        },
+        outputs: [
+          expect.objectContaining({
+            kind: "deposit",
+            amountLamports: 1_000_000n,
+            commitment: "3002",
+          }),
+          expect.objectContaining({
+            kind: "dummy",
+            amountLamports: 0n,
+            commitment: "3003",
+          }),
+        ],
+      }),
+    );
+    expect(buildTransactInstruction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signer: expect.objectContaining({ address: ownerAddress }),
+        recipient: ownerAddress,
+        feeRecipient,
+        programAddress,
+      }),
+    );
+
+    await expect(client.simulateDeposit(prepared)).resolves.toEqual({
+      ok: true,
+      logs: ["Program log: Instruction: Transact"],
+      unitsConsumed: 257_332,
+    });
+
+    await expect(client.sendDeposit(prepared)).resolves.toEqual({
+      signature,
+      sentAt: createdAt,
+      slot: 55,
+      explorerUrl: `https://explorer.gorbagana.wtf/tx/${signature}`,
+    });
+    expect(compileTransactionMessage).toHaveBeenCalled();
+    expect(signTransactionMessage).toHaveBeenCalled();
   });
 
   it("requires unlock before preparing and validates prepared output", async () => {
@@ -737,6 +968,12 @@ describe("client", () => {
         programAddress,
         ownerAddress,
         encryptedOutputs: ["010203"],
+        indexedOutputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "010203",
+          },
+        ],
         fetchOffset: 1,
       },
     });

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Indexer } from "@/indexer";
 import {
   NOTE_BACKUP_VERSION,
+  indexedEncryptedOutputSchema,
   type NoteBackup,
   type NoteStore,
 } from "@/notes";
@@ -59,11 +60,13 @@ export async function syncNotes(input: SyncNotesInput): Promise<NoteSyncResult> 
     throw new Error("Indexer total is behind the local note fetch offset.");
   }
 
-  if (range.encryptedOutputs.length === 0 && range.hasMore) {
+  if (range.outputs.length === 0 && range.hasMore) {
     throw new Error("Indexer returned no outputs while more outputs are available.");
   }
 
-  const fetched = range.encryptedOutputs.length;
+  validateRangeOutputs(range.outputs, previousOffset);
+
+  const fetched = range.outputs.length;
   const nextOffset = previousOffset + fetched;
   const backup = input.notes.importNotes({
     programAddress: parsed.programAddress,
@@ -74,9 +77,14 @@ export async function syncNotes(input: SyncNotesInput): Promise<NoteSyncResult> 
       programAddress: parsed.programAddress,
       ownerAddress: parsed.ownerAddress,
       exportedAt: exportedAt.toISOString(),
-      encryptedOutputs: [
-        ...current.encryptedOutputs,
-        ...range.encryptedOutputs.map(base64ToHex),
+      indexedOutputs: [
+        ...current.indexedOutputs,
+        ...range.outputs.map((output) =>
+          indexedEncryptedOutputSchema.parse({
+            outputIndex: output.outputIndex,
+            encryptedOutput: base64ToHex(output.encryptedOutput),
+          }),
+        ),
       ],
       fetchOffset: nextOffset,
       historyIndexes:
@@ -113,4 +121,19 @@ function base64ToHex(value: string): string {
   }
 
   return hex;
+}
+
+function validateRangeOutputs(
+  outputs: readonly { outputIndex: number }[],
+  expectedStart: number,
+): void {
+  for (const [index, output] of outputs.entries()) {
+    const expectedIndex = expectedStart + index;
+
+    if (output.outputIndex !== expectedIndex) {
+      throw new Error(
+        `Indexer returned output index ${output.outputIndex}, expected ${expectedIndex}.`,
+      );
+    }
+  }
 }

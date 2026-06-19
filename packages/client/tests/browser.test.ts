@@ -1,6 +1,7 @@
 import {
   UTXO_ENCRYPTION_VERSION_V2,
   createSignatureNoteKeyDeriver,
+  createNoteStore,
   deriveNoteKey,
   scanPrivateNotes,
   type BrowserNoteIdentity,
@@ -84,7 +85,10 @@ describe("browser private note scanning", () => {
           return {
             total: encryptedOutputs.length,
             hasMore: end < encryptedOutputs.length,
-            encryptedOutputs: outputs,
+            outputs: outputs.map((encryptedOutput, index) => ({
+              outputIndex: start + index,
+              encryptedOutput,
+            })),
           };
         },
       ),
@@ -169,6 +173,56 @@ describe("browser private note scanning", () => {
       code: "wallet_changed",
       message: "Wallet changed. Reconnect the original wallet and try again.",
     } satisfies Partial<PrivateNoteScanError>);
+  });
+
+  it("can run a full sync when local note storage has a stale fetch offset", async () => {
+    const storage = new TestStorage();
+    createNoteStore(storage).importNotes({
+      programAddress,
+      ownerAddress: walletAddress,
+      merge: false,
+      backup: {
+        version: 1,
+        programAddress,
+        ownerAddress: walletAddress,
+        exportedAt: "2026-06-19T00:00:00.000Z",
+        indexedOutputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "010203",
+          },
+        ],
+        fetchOffset: 2,
+        historyIndexes: [0],
+      },
+    });
+    const indexer = {
+      getOutputRange: vi.fn(async () => ({
+        total: 0,
+        hasMore: false,
+        outputs: [],
+      })),
+      getNullifierStatus: vi.fn(),
+    };
+
+    await expect(
+      scanPrivateNotes({
+        identity: createIdentity(new Uint8Array([9])),
+        indexer,
+        programAddress,
+        storage,
+        syncMode: "full",
+        getHasher: async () => createHasher([]),
+      }),
+    ).resolves.toMatchObject({
+      fetchedOutputCount: 0,
+      nextOutputOffset: 0,
+      totalOutputCount: 0,
+    });
+    expect(indexer.getOutputRange).toHaveBeenCalledWith({
+      start: 0,
+      end: 1_000,
+    });
   });
 });
 

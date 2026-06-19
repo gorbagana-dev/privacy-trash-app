@@ -89,7 +89,12 @@ describe("indexer", () => {
       data: {
         total: 4,
         hasMore: false,
-        encryptedOutputs: [encryptedOutput],
+        outputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput,
+          },
+        ],
       },
     });
     const indexer = createIndexer({
@@ -102,7 +107,12 @@ describe("indexer", () => {
     ).resolves.toEqual({
       total: 4,
       hasMore: false,
-      encryptedOutputs: [encryptedOutput],
+      outputs: [
+        {
+          outputIndex: 0,
+          encryptedOutput,
+        },
+      ],
     });
     expect(expectLastUrl(fetcher).href).toBe(
       "https://api.privacytrash.test/v1/outputs/range?start=0&end=4",
@@ -178,6 +188,30 @@ describe("indexer", () => {
         },
       ],
     });
+  });
+
+  it("reads the current Merkle state", async () => {
+    const fetcher = createFetch({
+      success: true,
+      data: {
+        treeHeight: 26,
+        root: "123",
+        nextIndex: 4,
+      },
+    });
+    const indexer = createIndexer({
+      baseUrl: "https://api.privacytrash.test",
+      fetch: fetcher,
+    });
+
+    await expect(indexer.getMerkleState()).resolves.toEqual({
+      treeHeight: 26,
+      root: "123",
+      nextIndex: 4,
+    });
+    expect(expectLastUrl(fetcher).href).toBe(
+      "https://api.privacytrash.test/v1/merkle/state",
+    );
   });
 
   it("reads nullifier status", async () => {

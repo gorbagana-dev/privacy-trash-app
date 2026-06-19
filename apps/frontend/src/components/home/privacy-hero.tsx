@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { HeroActions } from "@/components/home/hero-actions";
 import { TransferForm } from "@/features/transfer/components/transfer-form";
 
 export function PrivacyHero() {
@@ -19,23 +19,12 @@ export function PrivacyHero() {
             link between sender and recipient.
           </p>
 
-          <div className="mt-14 flex flex-col gap-3 sm:flex-row">
-            <Button
-              type="button"
-              className="h-12 rounded-xl bg-[#4dff91] px-8 font-heading text-base font-bold italic text-black uppercase hover:bg-[#67ffa2] active:scale-[0.98]"
-            >
-              Start Transfer
-            </Button>
-            <Button
-              type="button"
-              className="h-12 rounded-xl bg-white px-8 font-heading text-base font-bold italic text-black uppercase hover:bg-zinc-200 active:scale-[0.98]"
-            >
-              How It Works
-            </Button>
-          </div>
+          <HeroActions />
         </div>
 
-        <TransferForm />
+        <div id="transfer" className="scroll-mt-10">
+          <TransferForm />
+        </div>
       </section>
     </main>
   );

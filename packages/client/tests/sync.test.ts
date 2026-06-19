@@ -31,10 +31,25 @@ class TestStorage implements KeyValueStorage {
 function createIndexer(input: {
   total: number;
   hasMore: boolean;
-  encryptedOutputs: string[];
+  encryptedOutputs?: string[] | undefined;
+  outputs?: { outputIndex: number; encryptedOutput: string }[] | undefined;
 }): NoteSyncIndexer {
   return {
-    getOutputRange: vi.fn(async () => input),
+    getOutputRange: vi.fn(async (range: { start: number | bigint | string }) => {
+      const start = Number(range.start);
+      const outputs =
+        input.outputs ??
+        (input.encryptedOutputs ?? []).map((encryptedOutput, index) => ({
+          outputIndex: start + index,
+          encryptedOutput,
+        }));
+
+      return {
+        total: input.total,
+        hasMore: input.hasMore,
+        outputs,
+      };
+    }),
   };
 }
 
@@ -64,6 +79,16 @@ describe("syncNotes", () => {
       hasMore: true,
       backup: {
         encryptedOutputs: ["010203", "ffffff"],
+        indexedOutputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "010203",
+          },
+          {
+            outputIndex: 1,
+            encryptedOutput: "ffffff",
+          },
+        ],
         fetchOffset: 2,
         historyIndexes: [0],
       },
@@ -85,7 +110,12 @@ describe("syncNotes", () => {
         programAddress,
         ownerAddress,
         exportedAt: exportedAt.toISOString(),
-        encryptedOutputs: ["010203"],
+        indexedOutputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "010203",
+          },
+        ],
         fetchOffset: 2,
         historyIndexes: [0],
       },
@@ -111,6 +141,16 @@ describe("syncNotes", () => {
       fetched: 1,
       backup: {
         encryptedOutputs: ["010203", "0405"],
+        indexedOutputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "010203",
+          },
+          {
+            outputIndex: 2,
+            encryptedOutput: "0405",
+          },
+        ],
         fetchOffset: 3,
         historyIndexes: [2, 0],
       },
@@ -143,6 +183,7 @@ describe("syncNotes", () => {
       fetched: 0,
       backup: {
         encryptedOutputs: [],
+        indexedOutputs: [],
         fetchOffset: 0,
         historyIndexes: [],
       },
@@ -188,7 +229,12 @@ describe("syncNotes", () => {
         programAddress,
         ownerAddress,
         exportedAt: exportedAt.toISOString(),
-        encryptedOutputs: ["010203"],
+        indexedOutputs: [
+          {
+            outputIndex: 0,
+            encryptedOutput: "010203",
+          },
+        ],
         fetchOffset: 2,
         historyIndexes: [],
       },
@@ -222,5 +268,25 @@ describe("syncNotes", () => {
         ownerAddress,
       }),
     ).rejects.toThrow("Indexer returned no outputs");
+
+    const nonContiguousIndexer = createIndexer({
+      total: 2,
+      hasMore: false,
+      outputs: [
+        {
+          outputIndex: 1,
+          encryptedOutput: "AQID",
+        },
+      ],
+    });
+
+    await expect(
+      syncNotes({
+        notes: createNoteStore(new TestStorage()),
+        indexer: nonContiguousIndexer,
+        programAddress,
+        ownerAddress,
+      }),
+    ).rejects.toThrow("expected 0");
   });
 });

@@ -137,5 +137,9 @@ export function createClientRoutes(deps: Dependencies): Hono {
     return successResponse(ctx, await deps.merkleService.getProofByCommitments(query.data.commitments));
   });
 
+  app.get("/merkle/state", async (ctx) => {
+    return successResponse(ctx, await deps.merkleService.getState());
+  });
+
   return app;
 }

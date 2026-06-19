@@ -10,6 +10,7 @@ import {
   type CircuitProver,
   type KeyValueStorage,
   type NoteSelector,
+  type PoseidonHasher,
   type PrepareTransferInput,
   type ProverIndexer,
   type UtxoWitness,
@@ -28,7 +29,10 @@ const commitment =
   "118374f434fb827b5a877b197ebec62ab828a4828619a5c4144cc069db260d19";
 const commitmentDecimal = BigInt(`0x${commitment}`).toString();
 const noteNullifier =
-  "a18374f434fb827b5a877b197ebec62ab828a4828619a5c4144cc069db260d19";
+  "00000000000000000000000000000000000000000000000000000000000003ec";
+const noteNullifierDecimal = BigInt(`0x${noteNullifier}`).toString();
+const staleNoteNullifier =
+  "00000000000000000000000000000000000000000000000000000000000003ed";
 const nullifier = addressSchema.parse(
   "48JDPc91uGGyic2roMgbfAU7svJeHN3WN5TJHPCHuKuS",
 );
@@ -83,7 +87,7 @@ function createProofMaterial() {
       outputCommitments: [bytes, bytes],
     },
     extData: {
-      extAmount: -1_002_506n,
+      extAmount: -1_000_000n,
       fee: 2_506n,
     },
     encryptedOutput1: bytes,
@@ -120,7 +124,12 @@ function createNotes() {
       programAddress,
       ownerAddress,
       exportedAt: exportedAt.toISOString(),
-      encryptedOutputs: ["010203"],
+      indexedOutputs: [
+        {
+          outputIndex: 0,
+          encryptedOutput: "010203",
+        },
+      ],
       fetchOffset: 1,
       historyIndexes: [0],
     },
@@ -135,6 +144,7 @@ function createNoteSelector(
       {
         commitment,
         encryptedOutput: "010203",
+        outputIndex: 0,
         nullifier: noteNullifier,
         amountLamports: 2_000_000n,
         witness: createWitness(),
@@ -175,6 +185,20 @@ function createIndexer(): ProverIndexer {
   };
 }
 
+function createHasher(outputs = ["14", noteNullifierDecimal]): PoseidonHasher {
+  const queue = [...outputs];
+
+  return {
+    poseidonHashString: vi.fn(() => {
+      const output = queue.shift();
+
+      if (output === undefined) throw new Error("Unexpected Poseidon hash call.");
+
+      return output;
+    }),
+  };
+}
+
 function createMockCircuitProver(output: unknown = createProofMaterial()): CircuitProver {
   return {
     prove: vi.fn(async () => output),
@@ -187,11 +211,13 @@ describe("prover", () => {
     const indexer = createIndexer();
     const noteSelector = createNoteSelector();
     const circuitProver = createMockCircuitProver();
+    const hasher = createHasher();
     const provider = createProverProofProvider({
       notes,
       indexer,
       noteSelector,
       circuitProver,
+      hasher,
       programAddress,
       ownerAddress,
       now: () => exportedAt,
@@ -235,9 +261,12 @@ describe("prover", () => {
         {
           commitment,
           encryptedOutput: "010203",
+          outputIndex: 0,
           nullifier: noteNullifier,
           amountLamports: 2_000_000n,
-          witness: createWitness(),
+          witness: createWitness({
+            nullifier: noteNullifierDecimal,
+          }),
           merkleProof: expect.objectContaining({
             commitmentHex: commitment,
             outputIndex: "0",
@@ -247,12 +276,77 @@ describe("prover", () => {
     });
   });
 
+  it("rederives selected note nullifiers from Merkle proof indexes", async () => {
+    const notes = createNotes();
+    const indexer = createIndexer();
+    const noteSelector = createNoteSelector({
+      inputNotes: [
+        {
+          commitment,
+          encryptedOutput: "010203",
+          outputIndex: 0,
+          nullifier: staleNoteNullifier,
+          amountLamports: 2_000_000n,
+          witness: createWitness({
+            index: 99,
+            nullifier: "99",
+            nullifierHex: staleNoteNullifier,
+          }),
+        },
+      ],
+    });
+    const circuitProver = createMockCircuitProver();
+    const hasher = createHasher();
+    const provider = createProverProofProvider({
+      notes,
+      indexer,
+      noteSelector,
+      circuitProver,
+      hasher,
+      programAddress,
+      ownerAddress,
+      now: () => exportedAt,
+    });
+
+    await expect(
+      provider.createProofMaterial(createTransferInput()),
+    ).resolves.toEqual(createProofMaterial());
+    expect(hasher.poseidonHashString).toHaveBeenNthCalledWith(1, [
+      "11",
+      commitmentDecimal,
+      "0",
+    ]);
+    expect(hasher.poseidonHashString).toHaveBeenNthCalledWith(2, [
+      commitmentDecimal,
+      "0",
+      "14",
+    ]);
+    expect(indexer.getNullifierStatus).toHaveBeenCalledWith({
+      nullifier: noteNullifier,
+    });
+    expect(circuitProver.prove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputNotes: [
+          expect.objectContaining({
+            nullifier: noteNullifier,
+            witness: expect.objectContaining({
+              index: 0,
+              nullifier: noteNullifierDecimal,
+              nullifierHex: noteNullifier,
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("rejects transfers outside the prover scope", async () => {
     const provider = createProverProofProvider({
       notes: createNotes(),
       indexer: createIndexer(),
       noteSelector: createNoteSelector(),
       circuitProver: createMockCircuitProver(),
+      hasher: createHasher(),
       programAddress,
       ownerAddress,
     });
@@ -275,6 +369,7 @@ describe("prover", () => {
           {
             commitment,
             encryptedOutput: "aabbcc",
+            outputIndex: 0,
             nullifier: noteNullifier,
             amountLamports: 2_000_000n,
             witness: createWitness(),
@@ -282,6 +377,7 @@ describe("prover", () => {
         ],
       }),
       circuitProver: createMockCircuitProver(),
+      hasher: createHasher(),
       programAddress,
       ownerAddress,
     });
@@ -300,6 +396,7 @@ describe("prover", () => {
           {
             commitment,
             encryptedOutput: "010203",
+            outputIndex: 0,
             nullifier: noteNullifier,
             amountLamports: 2_000_000n,
             witness: createWitness({
@@ -309,6 +406,7 @@ describe("prover", () => {
         ],
       }),
       circuitProver: createMockCircuitProver(),
+      hasher: createHasher(),
       programAddress,
       ownerAddress,
     });
@@ -318,19 +416,34 @@ describe("prover", () => {
     ).rejects.toThrow("Selected note commitment does not match its witness");
   });
 
-  it("rejects selected notes that became spent before proof generation", async () => {
+  it("rejects selected notes that became spent before circuit proof generation", async () => {
     const indexer: ProverIndexer = {
       getNullifierStatus: vi.fn(async ({ nullifier: inputNullifier }) => ({
         spent: true,
         nullifier: inputNullifier,
       })),
-      getMerkleProof: vi.fn(),
+      getMerkleProof: vi.fn(async () => ({
+        treeHeight: 26,
+        root: "123",
+        nextIndex: 1,
+        proofs: [
+          {
+            commitment: BigInt(`0x${commitment}`).toString(10),
+            commitmentHex: commitment,
+            found: true,
+            outputIndex: "0",
+            pathElements: Array.from({ length: 26 }, () => "0"),
+            pathIndices: Array.from({ length: 26 }, () => 0),
+          },
+        ],
+      })),
     };
     const provider = createProverProofProvider({
       notes: createNotes(),
       indexer,
       noteSelector: createNoteSelector(),
       circuitProver: createMockCircuitProver(),
+      hasher: createHasher(),
       programAddress,
       ownerAddress,
     });
@@ -338,7 +451,9 @@ describe("prover", () => {
     await expect(
       provider.createProofMaterial(createTransferInput()),
     ).rejects.toThrow("Selected note has already been spent");
-    expect(indexer.getMerkleProof).not.toHaveBeenCalled();
+    expect(indexer.getNullifierStatus).toHaveBeenCalledWith({
+      nullifier: noteNullifier,
+    });
   });
 
   it("rejects missing or mismatched Merkle proofs", async () => {
@@ -368,6 +483,7 @@ describe("prover", () => {
       indexer,
       noteSelector: createNoteSelector(),
       circuitProver: createMockCircuitProver(),
+      hasher: createHasher(),
       programAddress,
       ownerAddress,
     });
@@ -387,6 +503,7 @@ describe("prover", () => {
       indexer: createIndexer(),
       noteSelector: createNoteSelector(),
       circuitProver,
+      hasher: createHasher(),
       programAddress,
       ownerAddress,
     });

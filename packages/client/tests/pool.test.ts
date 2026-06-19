@@ -60,6 +60,7 @@ describe("pool", () => {
         {
           commitment: commitmentA,
           encryptedOutput: "aa",
+          outputIndex: 0,
           nullifier: nullifierA,
           amountLamports: 4n,
           witness: {},
@@ -67,6 +68,7 @@ describe("pool", () => {
         {
           commitment: commitmentB,
           encryptedOutput: "bb",
+          outputIndex: 1,
           nullifier: nullifierB,
           amountLamports: 10n,
           witness: {},
