@@ -1,8 +1,9 @@
 import {
   IndexerError,
+  type ScanPrivateNotesInput,
   type IndexerStatus,
 } from "@gorbagana/privacy-trash-client/browser";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { prepareTransfer } from "@/features/transfer/logic/prepare-transfer";
 import type { TransferDraft } from "@/features/transfer/types/transfer.types";
@@ -78,6 +79,29 @@ describe("transfer preparation", () => {
 
     expect(prepared.signer).toBe(draft.signer);
     expect(prepared.recipient).toBe(draft.recipient);
+  });
+
+  it("passes only the client note identity contract to private note scanning", async () => {
+    const scanPrivateNotesSpy = vi.fn(
+      async (input: ScanPrivateNotesInput) => {
+        void input;
+
+        return privateNotes;
+      },
+    );
+
+    await prepareTransfer(draft, {
+      getPrivacyIdentity,
+      indexer,
+      scanPrivateNotes: scanPrivateNotesSpy,
+    });
+
+    expect(scanPrivateNotesSpy).toHaveBeenCalledOnce();
+    expect(scanPrivateNotesSpy.mock.calls[0]?.[0].identity).toEqual({
+      programAddress,
+      signatureBase64: privacyIdentity.signatureBase64,
+      walletAddress: privacyIdentity.walletAddress,
+    });
   });
 
   it("fails cleanly when the backend pool API fails", async () => {

@@ -2,6 +2,7 @@ import {
   IndexerError,
   PrivateNoteScanError,
   scanPrivateNotes,
+  type BrowserNoteIdentity,
   type Indexer,
   type IndexerStatus,
   type PrivateNoteScan,
@@ -31,6 +32,16 @@ export type PrepareTransferOptions = {
   privateNoteIndexer?: Pick<Indexer, "getOutputRange" | "getNullifierStatus"> | undefined;
   scanPrivateNotes?: ((input: ScanPrivateNotesInput) => Promise<PrivateNoteScan>) | undefined;
 };
+
+function toBrowserNoteIdentity(
+  identity: PrivacyIdentity,
+): BrowserNoteIdentity {
+  return {
+    programAddress: identity.programAddress,
+    signatureBase64: identity.signatureBase64,
+    walletAddress: identity.walletAddress,
+  };
+}
 
 function normalizePreparationError(error: unknown): Error {
   if (error instanceof IndexerError) {
@@ -96,7 +107,7 @@ export async function prepareTransfer(
   );
   const scanNotes = options.scanPrivateNotes ?? scanPrivateNotes;
   const privateNotes = await scanNotes({
-    identity: privacyIdentity,
+    identity: toBrowserNoteIdentity(privacyIdentity),
     hasherWasm: getHasherWasmInput(),
     indexer: options.privateNoteIndexer ?? privacyIndexer,
     programAddress: privacyIdentity.programAddress,
