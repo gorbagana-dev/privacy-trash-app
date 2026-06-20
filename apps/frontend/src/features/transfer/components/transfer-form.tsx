@@ -10,6 +10,10 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { usePrivateBalance } from "@/features/transfer/hooks/use-private-balance";
 import { useTransferFlow } from "@/features/transfer/hooks/use-transfer-flow";
+import {
+  commonGorAmounts,
+  formatCommonGorAmount,
+} from "@/features/transfer/logic/amount-presets";
 import { ConnectWalletButton } from "@/features/wallet/components/connect-wallet-button";
 import { WalletSummary } from "@/features/wallet/components/wallet-summary";
 import { useWalletConnection } from "@/features/wallet/hooks/use-wallet-connection";
@@ -54,6 +58,7 @@ export function TransferForm() {
     trigger,
   } = form;
   const mode = useWatch({ control, name: "mode" });
+  const amount = useWatch({ control, name: "amount" });
 
   useEffect(() => {
     void trigger();
@@ -153,6 +158,36 @@ export function TransferForm() {
               className="font-sans text-sm text-red-400"
               errors={[errors.amount]}
             />
+            <div
+              aria-label="Common GOR amounts"
+              className="grid grid-cols-3 gap-2"
+            >
+              {commonGorAmounts.map((commonAmount) => {
+                const isSelected = amount === commonAmount;
+
+                return (
+                  <button
+                    key={commonAmount}
+                    type="button"
+                    className={cn(
+                      "h-9 cursor-pointer rounded-lg border font-heading text-xs font-bold italic transition active:scale-[0.98]",
+                      isSelected
+                        ? "border-[#4dff91] bg-[#4dff91] text-black"
+                        : "border-white/[0.08] bg-black/20 text-zinc-500 hover:border-white/[0.16] hover:bg-white/[0.06] hover:text-white",
+                    )}
+                    onClick={() => {
+                      setValue("amount", commonAmount, {
+                        shouldDirty: true,
+                        shouldTouch: true,
+                        shouldValidate: true,
+                      });
+                    }}
+                  >
+                    {formatCommonGorAmount(commonAmount)}
+                  </button>
+                );
+              })}
+            </div>
           </Field>
 
           {mode === "transfer" ? (
