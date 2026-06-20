@@ -1,8 +1,8 @@
 # Privacy Trash Backend
 
-Hono API for Privacy Trash indexing and pool reads.
+Hono API for Privacy Trash indexing, pool reads, and relayed transfers.
 
-The backend reads Gorbagana program activity, stores indexed pool data in Postgres, and exposes the API used by the frontend.
+The backend reads Gorbagana program activity, stores indexed pool data in Postgres, and exposes the API used by the frontend. When a relayer keypair is configured, it can also simulate, submit, and confirm private transfer transactions.
 
 ## Setup
 
@@ -31,7 +31,15 @@ The API runs at `http://localhost:3002` by default.
 | `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins |
 | `GORBAGANA_RPC_URL` | Gorbagana RPC URL |
 | `PRIVACY_TRASH_PROGRAM_ADDRESS` | Deployed Privacy Trash program address |
+| `PRIVACY_TRASH_FEE_RECIPIENT` | Address that receives protocol fees |
+| `PRIVACY_TRASH_ALT_ADDRESS` | Optional address lookup table for smaller transactions |
 | `EXPLORER_BASE_URL` | Gorbagana explorer URL |
+| `RELAYER_KEYPAIR_PATH` | Optional path to a Solana keypair JSON file used by the relayer |
+| `RELAYER_PRIVATE_KEY_BASE58` | Optional base58 relayer private key |
+| `RELAYER_KEYPAIR_JSON` | Optional Solana keypair JSON array used by the relayer |
+| `RELAYER_CONFIRMATION_TIMEOUT_MS` | Confirmation timeout for relayed transactions |
+| `RELAYER_CONFIRMATION_POLL_INTERVAL_MS` | Confirmation polling interval |
+| `RELAYER_MAX_SEND_RETRIES` | RPC send retry limit for relayed transactions |
 | `INDEXER_AUTO_RUN` | Run the indexer loop on server start |
 | `INDEXER_POLL_INTERVAL_MS` | Indexer loop interval |
 | `INDEXER_DISCOVERY_LIMIT` | Signatures to discover per indexer pass |
@@ -118,6 +126,15 @@ Common error codes are `bad_request`, `not_found`, `service_unavailable`, and `i
 | --- | --- | --- | --- |
 | `POST` | `/v1/indexer/discover` | `limit` | Discover recent program signatures |
 | `POST` | `/v1/indexer/process` | `limit` | Process pending signatures |
+
+### Relayer
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/v1/relayer/transfers/simulate` | Simulate a private transfer from client-generated proof material |
+| `POST` | `/v1/relayer/transfers` | Submit and confirm a private transfer with the relayer signer |
+
+Set exactly one relayer key source: `RELAYER_KEYPAIR_PATH`, `RELAYER_PRIVATE_KEY_BASE58`, or `RELAYER_KEYPAIR_JSON`.
 
 ## Query Limits
 

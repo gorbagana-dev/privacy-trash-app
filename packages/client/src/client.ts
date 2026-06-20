@@ -57,6 +57,12 @@ import {
   createPrivateTransferExecutor,
 } from "@/private-transfer";
 import {
+  createRelayer,
+} from "@/relayer";
+import {
+  createRelayerTransferExecutor,
+} from "@/relayer-transfer";
+import {
   createPrivateDepositExecutor,
 } from "@/private-deposit";
 import type {
@@ -119,6 +125,8 @@ export type CreatePrivateClientInput = {
   fees: PoolFeeConfig | PoolFeeConfigReader;
   fetch?: IndexerFetch | undefined;
   indexerTimeoutMs?: number | undefined;
+  relayerBaseUrl?: string | undefined;
+  relayerTimeoutMs?: number | undefined;
   explorerBaseUrl?: string | undefined;
   feePayer?: string | undefined;
   computeUnitLimit?: number | undefined;
@@ -455,19 +463,7 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
     randomBytes: input.randomBytes,
     now: input.now,
   };
-  const transfer =
-    input.proofRunner === undefined
-      ? createPrivateTransferExecutor({
-          ...transferInput,
-          wasm: input.wasm,
-          zkey: input.zkey,
-          singleThread: input.singleThread,
-          groth16: input.groth16,
-        })
-      : createPrivateTransferExecutor({
-          ...transferInput,
-          proofRunner: input.proofRunner,
-        });
+  const transfer = createPrivateClientTransferExecutor(input, transferInput);
   const depositInput = {
     rpc: input.rpc,
     signer: input.signer,
@@ -524,6 +520,95 @@ export function createPrivateClient(input: CreatePrivateClientInput): Client {
     },
   };
 }
+
+function createPrivateClientTransferExecutor(
+  input: CreatePrivateClientInput,
+  transferInput: PrivateClientTransferInput,
+): TransferExecutor {
+  const proofInput = {
+    notes: transferInput.notes,
+    indexer: transferInput.indexer,
+    ownedNotes: transferInput.ownedNotes,
+    hasher: transferInput.hasher,
+    programAddress: transferInput.programAddress,
+    ownerAddress: transferInput.ownerAddress,
+    feeRecipient: transferInput.feeRecipient,
+    crypto: transferInput.crypto,
+    randomBytes: transferInput.randomBytes,
+    now: transferInput.now,
+  };
+
+  if (input.relayerBaseUrl !== undefined) {
+    const relayer = createRelayer({
+      baseUrl: input.relayerBaseUrl,
+      fetch: input.fetch,
+      timeoutMs: input.relayerTimeoutMs ?? input.indexerTimeoutMs,
+    });
+
+    if (input.proofRunner === undefined) {
+      return createRelayerTransferExecutor({
+        ...proofInput,
+        relayer,
+        wasm: input.wasm,
+        zkey: input.zkey,
+        singleThread: input.singleThread,
+        groth16: input.groth16,
+      });
+    }
+
+    return createRelayerTransferExecutor({
+      ...proofInput,
+      relayer,
+      proofRunner: input.proofRunner,
+    });
+  }
+
+  const chainInput = {
+    ...proofInput,
+    rpc: transferInput.rpc,
+    signer: transferInput.signer,
+    transactionExecutor: transferInput.transactionExecutor,
+    feePayer: transferInput.feePayer,
+    computeUnitLimit: transferInput.computeUnitLimit,
+    explorerBaseUrl: transferInput.explorerBaseUrl,
+    buildTransactInstruction: transferInput.buildTransactInstruction,
+  };
+
+  if (input.proofRunner === undefined) {
+    return createPrivateTransferExecutor({
+      ...chainInput,
+      wasm: input.wasm,
+      zkey: input.zkey,
+      singleThread: input.singleThread,
+      groth16: input.groth16,
+    });
+  }
+
+  return createPrivateTransferExecutor({
+    ...chainInput,
+    proofRunner: input.proofRunner,
+  });
+}
+
+type PrivateClientTransferInput = {
+  rpc: ChainRpc;
+  signer: TransactionSigner;
+  transactionExecutor: ReturnType<typeof createTransactionExecutor>;
+  notes: NoteStore;
+  indexer: ReturnType<typeof createIndexer>;
+  ownedNotes: OwnedNoteStore;
+  hasher: PoseidonHasher;
+  programAddress: string;
+  ownerAddress: string;
+  feeRecipient: string;
+  feePayer?: string | undefined;
+  computeUnitLimit?: number | undefined;
+  explorerBaseUrl?: string | undefined;
+  buildTransactInstruction?: BuildTransactInstruction | undefined;
+  crypto?: Pick<Crypto, "subtle"> | undefined;
+  randomBytes?: RandomBytes | undefined;
+  now?: (() => Date) | undefined;
+};
 
 function createPrivateClientTransactionOptions(
   input: CreatePrivateClientInput,

@@ -6,6 +6,7 @@ describe("loadEnv", () => {
   it("loads required database config and defaults public chain config", () => {
     const env = loadEnv({
       DATABASE_URL: "postgres://postgres:postgres@localhost:5432/privacy_trash",
+      RELAYER_PRIVATE_KEY_BASE58: "  private-key  ",
     });
 
     expect(env.DATABASE_URL).toBe("postgres://postgres:postgres@localhost:5432/privacy_trash");
@@ -15,6 +16,7 @@ describe("loadEnv", () => {
     expect(env.PRIVACY_TRASH_PROGRAM_ADDRESS).toBe(
       "GGNZHntmkQJvnApZESoUZ8PSmWT9n4jnUDsFrST866se",
     );
+    expect(env.RELAYER_PRIVATE_KEY_BASE58).toBe("private-key");
   });
 
   it("rejects non-postgres database URLs", () => {

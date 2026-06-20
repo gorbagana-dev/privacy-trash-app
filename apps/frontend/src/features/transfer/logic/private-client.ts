@@ -189,6 +189,7 @@ export async function createFrontendPrivateClient(
         ? undefined
         : [env.privacyTrashAltAddress],
     indexerBaseUrl: env.privacyTrashApiUrl,
+    relayerBaseUrl: env.privacyTrashApiUrl,
     explorerBaseUrl: env.explorerBaseUrl,
     hasher: await loadPoseidonHasher(),
     fees: createFeeConfig(),

@@ -19,7 +19,7 @@ The app runs at `http://localhost:3000` by default.
 | Variable | Description |
 | --- | --- |
 | `NEXT_PUBLIC_GORBAGANA_RPC_URL` | Gorbagana RPC URL |
-| `NEXT_PUBLIC_PRIVACY_TRASH_API_URL` | Backend API URL |
+| `NEXT_PUBLIC_PRIVACY_TRASH_API_URL` | Privacy Trash backend URL |
 | `NEXT_PUBLIC_PRIVACY_TRASH_PROGRAM_ADDRESS` | Deployed Privacy Trash program address |
 | `NEXT_PUBLIC_PRIVACY_TRASH_ALT_ADDRESS` | Optional address lookup table |
 | `NEXT_PUBLIC_HASHER_WASM_BASE_PATH` | Public path for hasher WASM files |

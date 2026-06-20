@@ -8,7 +8,17 @@ export default defineConfig({
   },
   clean: true,
   deps: {
-    neverBundle: [/^@hono\//, /^drizzle-orm/, "dotenv", "hono", "pg", "pino", "zod"],
+    neverBundle: [
+      /^@hono\//,
+      /^@solana\//,
+      /^drizzle-orm/,
+      "@gorbagana/privacy-trash-sdk",
+      "dotenv",
+      "hono",
+      "pg",
+      "pino",
+      "zod",
+    ],
   },
   entry: ["src/index.ts"],
   format: ["esm"],

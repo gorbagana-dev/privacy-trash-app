@@ -22,8 +22,8 @@ const steps = [
     body: "Create a proof that you can spend private notes without revealing the original deposit.",
   },
   {
-    title: "Receive",
-    body: "The recipient gets GOR from the pool, not directly from your wallet.",
+    title: "Submit",
+    body: "A relayer sends the proved transfer on-chain without seeing your original deposit.",
   },
 ] as const;
 
@@ -64,19 +64,19 @@ const privacyNotes = [
 const states = [
   {
     title: "Review",
-    body: "Check the recipient, amount, and fee before signing.",
+    body: "Check the action, recipient, amount, and fee before continuing.",
   },
   {
-    title: "Approve",
-    body: "Your wallet asks you to approve the transfer.",
+    title: "Prove",
+    body: "Your browser creates the private transfer proof. Deposits still use a normal wallet transaction.",
+  },
+  {
+    title: "Submit",
+    body: "The relayer submits the transfer. The proof locks the recipient, amount, and fee.",
   },
   {
     title: "Receive",
     body: "The recipient gets GOR from the privacy pool.",
-  },
-  {
-    title: "Refresh",
-    body: "Your private balance updates for the next transfer.",
   },
 ] as const;
 
@@ -219,7 +219,7 @@ export default function HowItWorksPage() {
       <section className="mx-auto w-full max-w-7xl px-6 py-20 sm:px-10 lg:px-12">
         <SectionHeader
           kicker="Transfer flow"
-          title="Review, approve, receive."
+          title="Review, prove, receive."
         />
 
         <div className="mt-10 grid gap-4 md:grid-cols-2 lg:grid-cols-4">

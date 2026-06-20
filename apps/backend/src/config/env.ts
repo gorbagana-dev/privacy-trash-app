@@ -1,5 +1,6 @@
 import "dotenv/config";
 
+import { address, isAddress } from "@solana/kit";
 import { z } from "zod";
 
 const portSchema = z.coerce.number().int().min(1).max(65_535);
@@ -9,6 +10,15 @@ const indexerProcessLimitSchema = z.coerce.number().int().min(1).max(100);
 const booleanStringSchema = z
   .enum(["true", "false"])
   .transform((value) => value === "true");
+const emptyStringToUndefined = (value: unknown) =>
+  value === "" ? undefined : value;
+const addressStringSchema = z
+  .string()
+  .trim()
+  .refine((value) => isAddress(value), {
+    message: "Expected a valid Gorbagana address.",
+  })
+  .transform((value) => address(value));
 const postgresUrlSchema = z
   .string()
   .trim()
@@ -38,12 +48,32 @@ const envSchema = z.object({
         .filter(Boolean),
     ),
   GORBAGANA_RPC_URL: z.url().default("https://rpc.gorbagana.wtf"),
-  PRIVACY_TRASH_PROGRAM_ADDRESS: z
-    .string()
-    .trim()
-    .min(32)
-    .default("GGNZHntmkQJvnApZESoUZ8PSmWT9n4jnUDsFrST866se"),
+  PRIVACY_TRASH_PROGRAM_ADDRESS: addressStringSchema.default(
+    address("GGNZHntmkQJvnApZESoUZ8PSmWT9n4jnUDsFrST866se"),
+  ),
   EXPLORER_BASE_URL: z.url().default("https://explorer.gorbagana.wtf"),
+  PRIVACY_TRASH_FEE_RECIPIENT: addressStringSchema.default(
+    address("WWcYj6MG8n3rCp1EDvKXaBVUpPcQL7Ny9HoagafBMxn"),
+  ),
+  PRIVACY_TRASH_ALT_ADDRESS: z.preprocess(
+    emptyStringToUndefined,
+    addressStringSchema.optional(),
+  ),
+  RELAYER_KEYPAIR_PATH: z.preprocess(
+    emptyStringToUndefined,
+    z.string().trim().min(1).optional(),
+  ),
+  RELAYER_PRIVATE_KEY_BASE58: z.preprocess(
+    emptyStringToUndefined,
+    z.string().trim().min(1).optional(),
+  ),
+  RELAYER_KEYPAIR_JSON: z.preprocess(
+    emptyStringToUndefined,
+    z.string().trim().min(1).optional(),
+  ),
+  RELAYER_CONFIRMATION_TIMEOUT_MS: positiveIntegerSchema.default(60_000),
+  RELAYER_CONFIRMATION_POLL_INTERVAL_MS: positiveIntegerSchema.default(1_000),
+  RELAYER_MAX_SEND_RETRIES: positiveIntegerSchema.default(5),
   INDEXER_AUTO_RUN: booleanStringSchema.default(true),
   INDEXER_POLL_INTERVAL_MS: positiveIntegerSchema.default(5_000),
   INDEXER_DISCOVERY_LIMIT: indexerLimitSchema.default(100),

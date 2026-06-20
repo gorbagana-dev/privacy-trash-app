@@ -9,7 +9,7 @@ This repository contains the frontend, backend, client package, and contract SDK
 | Path | Package | Purpose |
 | --- | --- | --- |
 | `apps/frontend` | `@gorbagana/privacy-trash-frontend` | Next.js app |
-| `apps/backend` | `@gorbagana/privacy-trash-backend` | Hono API and indexer |
+| `apps/backend` | `@gorbagana/privacy-trash-backend` | Hono API, indexer, and relayer |
 | `packages/client` | `@gorbagana/privacy-trash-client` | Browser and transaction workflow helpers |
 | `packages/sdk` | `@gorbagana/privacy-trash-sdk` | TypeScript SDK for the on-chain program |
 

@@ -7,6 +7,7 @@ import { createIndexerService, type IndexerService } from "@/modules/indexer/ind
 import { createMerkleService, type MerkleService } from "@/modules/merkle/merkle.service";
 import { createPoolRepository } from "@/modules/pool/pool.repository";
 import { createPoolService, type PoolService } from "@/modules/pool/pool.service";
+import { createRelayerService, type RelayerService } from "@/modules/relayer/relayer.service";
 
 export type Dependencies = {
   env: Env;
@@ -15,6 +16,7 @@ export type Dependencies = {
   indexerService: IndexerService;
   merkleService: MerkleService;
   poolService: PoolService;
+  relayerService: RelayerService;
   close(): Promise<void>;
 };
 
@@ -24,6 +26,7 @@ export type CreateDependenciesOptions = {
   indexerService?: IndexerService;
   merkleService?: MerkleService;
   poolService?: PoolService;
+  relayerService?: RelayerService;
 };
 
 export function createDependencies(
@@ -64,6 +67,21 @@ export function createDependencies(
       indexerRepository,
       poolRepository,
     });
+  const relayerService =
+    options.relayerService ??
+    createRelayerService({
+      rpcUrl: env.GORBAGANA_RPC_URL,
+      programAddress: env.PRIVACY_TRASH_PROGRAM_ADDRESS,
+      feeRecipient: env.PRIVACY_TRASH_FEE_RECIPIENT,
+      explorerBaseUrl: env.EXPLORER_BASE_URL,
+      lookupTableAddress: env.PRIVACY_TRASH_ALT_ADDRESS,
+      keypairPath: env.RELAYER_KEYPAIR_PATH,
+      privateKeyBase58: env.RELAYER_PRIVATE_KEY_BASE58,
+      keypairJson: env.RELAYER_KEYPAIR_JSON,
+      confirmationTimeoutMs: env.RELAYER_CONFIRMATION_TIMEOUT_MS,
+      confirmationPollIntervalMs: env.RELAYER_CONFIRMATION_POLL_INTERVAL_MS,
+      maxSendRetries: env.RELAYER_MAX_SEND_RETRIES,
+    });
 
   return {
     env,
@@ -72,6 +90,7 @@ export function createDependencies(
     indexerService,
     merkleService,
     poolService,
+    relayerService,
     async close() {
       if (!options.database) {
         await database.close();

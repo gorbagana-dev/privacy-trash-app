@@ -199,12 +199,34 @@ export {
 } from "@/proof";
 export {
   createPrivateTransferExecutor,
+  createPrivateTransferProofProvider,
+  type CreatePrivateTransferProofProviderInput,
   type CreatePrivateTransferExecutorInput,
 } from "@/private-transfer";
 export {
   createPrivateDepositExecutor,
   type CreatePrivateDepositExecutorInput,
 } from "@/private-deposit";
+export {
+  createRelayer,
+  createRelayerTransferRequest,
+  RelayerError,
+  relayerProofMaterialSchema,
+  relayerTransferRequestSchema,
+  serializeProofMaterial,
+  type CreateRelayerInput,
+  type Relayer,
+  type RelayerFetch,
+  type RelayerProofMaterial,
+  type RelayerTransferRequest,
+} from "@/relayer";
+export {
+  createRelayerTransferExecutor,
+  getRelayerTransferPayload,
+  RELAYER_TRANSFER_PAYLOAD_KIND,
+  type CreateRelayerTransferExecutorInput,
+  type RelayerTransferPayload,
+} from "@/relayer-transfer";
 export {
   createProofRunner,
   createSnarkInput,

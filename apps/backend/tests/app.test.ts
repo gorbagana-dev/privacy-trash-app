@@ -11,6 +11,10 @@ import type {
 } from "@/modules/indexer/indexer.service";
 import type { MerkleService } from "@/modules/merkle/merkle.service";
 import type { PoolService } from "@/modules/pool/pool.service";
+import {
+  RelayerConfigurationError,
+  type RelayerService,
+} from "@/modules/relayer/relayer.service";
 
 function createTestDependencies(
   input: {
@@ -19,6 +23,7 @@ function createTestDependencies(
     processSignatures?: () => Promise<ProcessSignaturesResult>;
     merkleService?: MerkleService;
     poolService?: PoolService;
+    relayerService?: RelayerService;
   } = {},
 ): Dependencies {
   const database = {
@@ -122,7 +127,61 @@ function createTestDependencies(
           spentAt: null,
         }),
       } satisfies PoolService),
+    relayerService:
+      input.relayerService ??
+      ({
+        simulateTransfer: vi.fn(async () => ({
+          ok: true,
+          logs: ["Program log: Instruction: Transact"],
+          unitsConsumed: 247_349,
+        })),
+        submitTransfer: vi.fn(async () => ({
+          signature:
+            "4ap58hFAEEzFrPFgdxUaaTmJA7iMzSdcLXFTuA6JHbH6KX5gQ3MFu2WqUC2p61wmDhgjNLk6v4Ge3QoX8Api6Tua",
+          sentAt: "2026-06-19T19:33:33.000Z",
+          explorerUrl:
+            "https://explorer.gorbagana.wtf/tx/4ap58hFAEEzFrPFgdxUaaTmJA7iMzSdcLXFTuA6JHbH6KX5gQ3MFu2WqUC2p61wmDhgjNLk6v4Ge3QoX8Api6Tua",
+          slot: 66_920_165,
+        })),
+      } satisfies RelayerService),
     close: async () => undefined,
+  };
+}
+
+function base64Bytes(length: number, value: number): string {
+  return Buffer.from(new Uint8Array(length).fill(value)).toString("base64");
+}
+
+function createRelayerTransferBody(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    programAddress: "GGNZHntmkQJvnApZESoUZ8PSmWT9n4jnUDsFrST866se",
+    recipient: "GefVj3p67jPoEaEYcYz16gaa3Z2bHGfKsomrpScPxiWN",
+    feeRecipient: "WWcYj6MG8n3rCp1EDvKXaBVUpPcQL7Ny9HoagafBMxn",
+    nullifiers: [
+      "BXK4w4ZNi5jbm8n5iS22z6d1eLyyAqNu3bm1KBoegVyL",
+      "48JDPc91uGGyic2roMgbfAU7svJeHN3WN5TJHPCHuKuS",
+      "6dx35etGjd7hh5BHKjf1sAxZPbnFZAfqLEKr5D8VoyWf",
+      "gSEh8xDJBB2ifRJWNwdcJShDpbFDjhRpeag62iNT3fX",
+    ],
+    proof: {
+      proofA: base64Bytes(64, 1),
+      proofB: base64Bytes(128, 2),
+      proofC: base64Bytes(64, 3),
+      root: base64Bytes(32, 4),
+      publicAmount: base64Bytes(32, 5),
+      extDataHash: base64Bytes(32, 6),
+      inputNullifiers: [base64Bytes(32, 7), base64Bytes(32, 8)],
+      outputCommitments: [base64Bytes(32, 9), base64Bytes(32, 10)],
+    },
+    extData: {
+      extAmount: "-1000000",
+      fee: "2500",
+    },
+    encryptedOutput1: base64Bytes(96, 11),
+    encryptedOutput2: base64Bytes(96, 12),
+    ...overrides,
   };
 }
 
@@ -631,6 +690,137 @@ describe("createApp", () => {
       success: false,
       error: {
         code: "bad_request",
+      },
+    });
+  });
+
+  it("simulates relayed private transfers", async () => {
+    const relayerService: RelayerService = {
+      simulateTransfer: vi.fn(async () => ({
+        ok: true,
+        logs: ["Program log: Instruction: Transact"],
+        unitsConsumed: 247_349,
+      })),
+      submitTransfer: vi.fn(),
+    };
+    const app = createApp(createTestDependencies({ relayerService }));
+    const response = await app.request("/v1/relayer/transfers/simulate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(createRelayerTransferBody()),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(relayerService.simulateTransfer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programAddress: "GGNZHntmkQJvnApZESoUZ8PSmWT9n4jnUDsFrST866se",
+        recipient: "GefVj3p67jPoEaEYcYz16gaa3Z2bHGfKsomrpScPxiWN",
+        feeRecipient: "WWcYj6MG8n3rCp1EDvKXaBVUpPcQL7Ny9HoagafBMxn",
+        extData: {
+          extAmount: -1_000_000n,
+          fee: 2_500n,
+        },
+      }),
+    );
+    expect(body).toEqual({
+      success: true,
+      data: {
+        ok: true,
+        logs: ["Program log: Instruction: Transact"],
+        unitsConsumed: 247_349,
+      },
+    });
+  });
+
+  it("submits relayed private transfers", async () => {
+    const relayerService: RelayerService = {
+      simulateTransfer: vi.fn(),
+      submitTransfer: vi.fn(async () => ({
+        signature:
+          "4ap58hFAEEzFrPFgdxUaaTmJA7iMzSdcLXFTuA6JHbH6KX5gQ3MFu2WqUC2p61wmDhgjNLk6v4Ge3QoX8Api6Tua",
+        sentAt: "2026-06-19T19:33:33.000Z",
+        explorerUrl:
+          "https://explorer.gorbagana.wtf/tx/4ap58hFAEEzFrPFgdxUaaTmJA7iMzSdcLXFTuA6JHbH6KX5gQ3MFu2WqUC2p61wmDhgjNLk6v4Ge3QoX8Api6Tua",
+        slot: 66_920_165,
+      })),
+    };
+    const app = createApp(createTestDependencies({ relayerService }));
+    const response = await app.request("/v1/relayer/transfers", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(createRelayerTransferBody()),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(relayerService.submitTransfer).toHaveBeenCalledOnce();
+    expect(body).toMatchObject({
+      success: true,
+      data: {
+        signature:
+          "4ap58hFAEEzFrPFgdxUaaTmJA7iMzSdcLXFTuA6JHbH6KX5gQ3MFu2WqUC2p61wmDhgjNLk6v4Ge3QoX8Api6Tua",
+        slot: 66_920_165,
+      },
+    });
+  });
+
+  it("rejects relayer requests outside backend policy", async () => {
+    const relayerService: RelayerService = {
+      simulateTransfer: vi.fn(),
+      submitTransfer: vi.fn(),
+    };
+    const app = createApp(createTestDependencies({ relayerService }));
+    const response = await app.request("/v1/relayer/transfers/simulate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(
+        createRelayerTransferBody({
+          feeRecipient: "BXK4w4ZNi5jbm8n5iS22z6d1eLyyAqNu3bm1KBoegVyL",
+        }),
+      ),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(relayerService.simulateTransfer).not.toHaveBeenCalled();
+    expect(body).toMatchObject({
+      success: false,
+      error: {
+        code: "bad_request",
+      },
+    });
+  });
+
+  it("returns service unavailable when the relayer is not configured", async () => {
+    const relayerService: RelayerService = {
+      simulateTransfer: vi.fn(async () => {
+        throw new RelayerConfigurationError("Relayer keypair is not configured.");
+      }),
+      submitTransfer: vi.fn(),
+    };
+    const app = createApp(createTestDependencies({ relayerService }));
+    const response = await app.request("/v1/relayer/transfers/simulate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(createRelayerTransferBody()),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body).toMatchObject({
+      success: false,
+      error: {
+        code: "service_unavailable",
+        message: "Relayer keypair is not configured.",
       },
     });
   });

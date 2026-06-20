@@ -11,6 +11,7 @@ import { createConfigRoutes } from "@/api/routes/config.route";
 import { createHealthRoutes } from "@/api/routes/health.route";
 import { createIndexerRoutes } from "@/api/routes/indexer.route";
 import { createPoolRoutes } from "@/api/routes/pool.route";
+import { createRelayerRoutes } from "@/api/routes/relayer.route";
 import type { Dependencies } from "@/dependencies";
 
 const corsExposeHeaders = ["X-Request-Id"];
@@ -49,6 +50,7 @@ export function createApp(deps: Dependencies): Hono {
   app.route("/v1", createConfigRoutes(deps));
   app.route("/v1/indexer", createIndexerRoutes(deps));
   app.route("/v1/pool", createPoolRoutes(deps));
+  app.route("/v1/relayer", createRelayerRoutes(deps));
 
   app.notFound(notFoundHandler);
 
